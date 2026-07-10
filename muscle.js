@@ -105,7 +105,7 @@ async function blockUser(waClient, userId) {
         console.log(`[MUSCLE:BLOCK] ${userId} bloqué avec succès.`);
         return { action: 'block', userId, status: 'blocked' };
     } catch (err) {
-        console.error(`[MUSCLE:BLOCK] Erreur :`,.message);
+        console.error(`[MUSCLE:BLOCK] Erreur :`, err.message);
         throw err;
     }
 }
