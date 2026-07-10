@@ -29,7 +29,7 @@ require('./security/immune').activate();
 require('./memory/mongo').connect();
 
 // ── ÉTAPE 4 — Démarrage du Pouls (le Sang vit dans le même organe) ──
-const { sang, start: startHeartbeat } = require('../heartbeat');
+const { sang, start: startHeartbeat } = require('../core/heartbeat');
 startHeartbeat();
 
 // ── ÉTAPE 4B — Initialisation du client IA ──────────────────────────
