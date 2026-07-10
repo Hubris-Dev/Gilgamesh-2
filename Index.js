@@ -2,11 +2,16 @@
 // RÔLE : la charpente. Démarre les autres systèmes, dans un ordre fixe, et RIEN d'autre.
 // AUCUNE logique de décision ici (pas de handleCommand, pas de handleAI, pas de send()).
 // Voir CODEX — Système 1, Loi 1 (La Frontière), Loi 2 (L'Autorité Mécanique).
+//
+// Ordre exact du Codex : gène-seed → .env → Mémoire → Pouls → Canaux → Nerf.
+// Immunitaire surveille en parallèle, dès l'étape 1 — pas un numéro dans la
+// séquence, une présence constante depuis le début. Le Sang vit dans
+// core/heartbeat.js (Système Cardiovasculaire), pas un organe séparé.
 
 const geneseed = require('./core/geneseed');
 
 // ── ÉTAPE 1 — Gène-seed ───────────────────────────────────────────
-// Avant même .env. Seul crash volontaire autorisé dans tout le corps (Loi 4).
+// Seul crash volontaire autorisé dans tout le corps (Loi 4).
 if (!geneseed.verify()) {
   console.error('[SQUELETTE] Gène-seed invalide. Arrêt.');
   process.exit(1);
@@ -15,27 +20,24 @@ if (!geneseed.verify()) {
 // ── ÉTAPE 2 — Chargement de .env ──────────────────────────────────
 require('dotenv').config();
 
-// ── ÉTAPE 3 — Sang (event bus) ────────────────────────────────────
-// Fondation de communication. Doit exister avant que tout autre organe
-// ne puisse emit() ou on(). Aucun organe ne s'appelle directement.
-const sang = require('./core/sang');
-
-// ── ÉTAPE 4 — Système Immunitaire ─────────────────────────────────
-// Armé avant Canaux (étape 7) : aucune porte ne s'ouvre sur l'extérieur
-// avant que le filtrage soit en écoute sur le Sang.
+// ── Système Immunitaire — en parallèle, dès maintenant ────────────
 require('./security/immune').activate();
 
-// ── ÉTAPE 5 — Connexion Mémoire (MongoDB) ─────────────────────────
-// TODO : require('./memory/mongo').connect()
+// ── ÉTAPE 3 — Connexion Mémoire (MongoDB, auth + conversationnelle) ──
+// Tâche de fond, ne bloque pas le reste. Écoute 'memoire:connectee' sur
+// le Sang si un organe doit vraiment attendre.
+require('./memory/mongo').connect();
 
-// ── ÉTAPE 6 — Démarrage du Pouls (Heartbeat) ──────────────────────
-// TODO : require('./core/heartbeat').start()
+// ── ÉTAPE 4 — Démarrage du Pouls (le Sang vit dans le même organe) ──
+const { sang, start: demarrerPouls } = require('./core/heartbeat');
+demarrerPouls();
 
-// ── ÉTAPE 7 — Connexion des Canaux (WhatsApp en priorité) ─────────
-// TODO : require('./channels/whatsapp').connect()
+// ── ÉTAPE 5 — Connexion des Canaux (WhatsApp en priorité) ─────────
+require('./channels/whatsapp').connect();
 
-// ── ÉTAPE 8 — Activation du Nerf ──────────────────────────────────
+// ── ÉTAPE 6 — Activation du Nerf ──────────────────────────────────
 // TODO : require('./brain').activate()
 
-console.log('[SQUELETTE] Démarrage OK — étapes 1 à 4 actives. Reste en attente de construction.');
+console.log('[SQUELETTE] Démarrage OK — étapes 1 à 5 actives + Immunitaire. Reste : Nerf.');
 sang.emit('squelette:pret', { horodatage: new Date().toISOString() });
+
