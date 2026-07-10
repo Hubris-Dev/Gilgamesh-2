@@ -68,7 +68,7 @@ function activateBrain() {
             // ============================================================
             let history = [];
             try {
-                history = await getMemory(senderId, isGroup ? groupId : null, limit = 20);
+                history = await getMemory(senderId, isGroup ? groupId : null,20);
             } catch (err) {
                 console.warn("[NERF] Mémoire indisponible, conversation démarrée vierge.", err.message);
                 history = [];
@@ -273,7 +273,7 @@ RÉPONSE EN JSON STRICT (pas de texte avant/après) :
 }
 
 /**
- * BUILDCONTEXTUALPRROMP — Construction du prompt contextuel
+ * BUILDCONTEXTUALPROMPT — Construction du prompt contextuel
  * Fusionné : SYSTEM_PROMPT + historique + métadonnées + message actuel
  */
 function buildContextualPrompt(systemPrompt, history, userMessage, metadata, mediaType, mediaPath) {
