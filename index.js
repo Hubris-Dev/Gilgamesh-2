@@ -29,7 +29,12 @@ require('./security/immune').activate();
 require('./memory/mongo').connect();
 
 // ── ÉTAPE 4 — Démarrage du Pouls (le Sang vit dans le même organe) ──
-const { sang } = require('./core/heartbeat');
+const { sang, start: startHeartbeat } = require('./core/heartbeat');
+startHeartbeat();
+
+// ── ÉTAPE 4B — Initialisation du client IA ──────────────────────────
+const { initializeKryvenClient } = require('./core/kryven-client');
+initializeKryvenClient();
 
 // ── ÉTAPE 5 — Connexion des Canaux (WhatsApp en priorité) ─────────
 require('./channels/whatsapp').connect();
