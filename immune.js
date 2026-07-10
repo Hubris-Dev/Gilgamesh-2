@@ -8,7 +8,7 @@
 //   Émet   : 'immunitaire:accepte'  { senderId, text (nettoyé), canal, estWonder }
 //            'immunitaire:bloque'   { senderId, raison, canal }
 
-const { sang } = require('../core/heartbeat');
+const { sang } = require('../heartbeat');
 const recognition = require('./recognition');
 const filter = require('./filter');
 
