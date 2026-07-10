@@ -4,7 +4,7 @@
 // Loi 1 : Le Muscle reçoit des intentions via le Sang, jamais appels directs
 // Loi 2 : Séparation stricte : Nerf décide QUOI, Muscle exécute COMMENT
 
-const { sang } = require('./core/heartbeat');
+const { sang } = require('../core/heartbeat');
 const { getWAClient } = require('./channels/whatsapp');
 
 /**
