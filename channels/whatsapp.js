@@ -16,7 +16,7 @@
 // authState.creds.registered) sont à confirmer au premier lancement réel.
 
 const path = require('node:path');
-const { sang } = require('../heartbeat');
+const { sang } = require('./core/heartbeat');
 const { parseMessageBrute } = require('../utils/parser');
 
 const NOM_CANAL = 'whatsapp';
