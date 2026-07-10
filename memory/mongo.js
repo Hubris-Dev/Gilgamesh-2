@@ -8,7 +8,7 @@
 // Le nom de la base est attendu DANS l'URI (ex: .../gilgamesh?retryWrites=true).
 
 const { MongoClient } = require('mongodb');
-const { sang } = require('./core/heartbeat');
+const { sang } = require('../core/heartbeat');
 
 let client = null;
 let db = null;
