@@ -9,7 +9,7 @@ const path = require('path');
 const { sang } = require('./core/heartbeat');
 const { resolveKryvenPulse, resolveGroqPulse } = require('./core/kryven-client');
 const { getMemory, appendMemory } = require('./memory/mongo');
-const { parseEstomac } = require('./utils/parser');
+const { parseMessageBrute: parseEstomac } = require('./utils/parser');
 const {  isSafeInput } = require('./security/filter');
 
 // Charger l'identité — l'ADN du Nerf (Système Endocrinien)
