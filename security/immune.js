@@ -8,9 +8,9 @@
 //   Émet   : 'immunitaire:accepte'  { senderId, text (nettoyé), canal, isWonder, senderName, messageId, isGroup, groupId, mediaType, mediaPath }
 //            'immunitaire:bloque'   { senderId, raison, canal }
 
-const { sang } = require('../heartbeat');
+const { sang } = require('./core/heartbeat');
 const recognition = ('../recognition');
-const filter = require('../filter');
+const filter = require('./security/filter');
 
 function activate() {
   sang.on('canal:message:recu', (payload = {}) => {
