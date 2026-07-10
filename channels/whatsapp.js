@@ -103,11 +103,39 @@ async function connect() {
         const propre = parseMessageBrute(msgBrut);
         if (!propre || !propre.text) continue;
 
+        const remoteJid = msgBrut.key.remoteJid || '';
+        const isGroup = remoteJid.endsWith('@g.us');
+
         sang.emit('canal:message:recu', {
           senderId: propre.sender,
           text: propre.text,
           canal: NOM_CANAL,
+          messageId: propre.messageId,
+          senderName: propre.nomAffiche,
+          isGroup,
+          groupId: isGroup ? remoteJid : null,
+          mediaType: null, // À enrichir si média
+          mediaPath: null,
         });
+      }
+    });
+
+    // ========== LISTENER POUR LES RÉPONSES ==========
+    // Le Nerf émet une réponse via 'reponse:prete'
+    // Le Souffle (Respiratoire) doit l'envoyer
+    sang.on('reponse:prete', async (payload) => {
+      try {
+        const { target, text, isGroup } = payload;
+        if (!sock || !target || !text) {
+          console.warn('[WHATSAPP] Payload réponse incomplet ou socket fermé.');
+          return;
+        }
+
+        const destinataireId = isGroup ? target : `${target}@s.whatsapp.net`;
+        await sock.sendMessage(destinataireId, { text });
+        console.log(`[WHATSAPP] Réponse envoyée à ${destinataireId}`);
+      } catch (err) {
+        console.error('[WHATSAPP] Erreur lors de l\'envoi de la réponse :', err.message);
       }
     });
 
