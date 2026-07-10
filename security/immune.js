@@ -4,8 +4,8 @@
 // Voir CODEX — Loi 1 (La Frontière), Système 6.
 //
 // CONVENTION D'ÉVÉNEMENTS :
-//   Écoute : 'canal:message:recu'   { senderId, text, canal }
-//   Émet   : 'immunitaire:accepte'  { senderId, text (nettoyé), canal, isWonder }
+//   Écoute : 'canal:message:recu'   { senderId, text, canal, senderName, messageId, isGroup, groupId, mediaType, mediaPath }
+//   Émet   : 'immunitaire:accepte'  { senderId, text (nettoyé), canal, isWonder, senderName, messageId, isGroup, groupId, mediaType, mediaPath }
 //            'immunitaire:bloque'   { senderId, raison, canal }
 
 const { sang } = require('../core/heartbeat');
@@ -14,7 +14,7 @@ const filter = require('./filter');
 
 function activate() {
   sang.on('canal:message:recu', (payload = {}) => {
-    const { senderId, text, canal } = payload;
+    const { senderId, text, canal, senderName, messageId, isGroup, groupId, mediaType, mediaPath } = payload;
 
     const verdict = filter.isSafeInput(text);
     if (!verdict.safe) {
@@ -28,6 +28,12 @@ function activate() {
       text: verdict.nettoye,
       canal,
       isWonder: recognition.isWonder(senderId),
+      senderName: senderName || 'Inconnu',
+      messageId,
+      isGroup,
+      groupId,
+      mediaType,
+      mediaPath,
     });
   });
 
