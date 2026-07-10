@@ -1,19 +1,15 @@
 // security/immune.js
 // Système Immunitaire — Coordinateur
-// RÔLE : écoute le Sang, applique gate.js + filter.js, émet le verdict.
-// Ne contient pas la logique de décision elle-même (déléguée à gate.js/filter.js) —
-// juste l'orchestration. Voir CODEX — Loi 1 (La Frontière).
+// RÔLE : écoute le Sang, applique recognition.js + filter.js (Foie), émet le verdict.
+// Voir CODEX — Loi 1 (La Frontière), Système 6.
 //
-// CONVENTION D'ÉVÉNEMENTS (contrat à respecter quand Canaux sera construit) :
+// CONVENTION D'ÉVÉNEMENTS :
 //   Écoute : 'canal:message:recu'   { senderId, text, canal }
-//   Émet   : 'immunitaire:accepte'  { senderId, text, canal, estAdmin }
+//   Émet   : 'immunitaire:accepte'  { senderId, text (nettoyé), canal, estWonder }
 //            'immunitaire:bloque'   { senderId, raison, canal }
-//
-// Aucun autre organe ne doit envoyer un message brut au Nerf —
-// tout message doit d'abord passer par ici.
 
-const sang = require('../core/sang');
-const gate = require('./gate');
+const { sang } = require('../core/heartbeat');
+const recognition = require('./recognition');
 const filter = require('./filter');
 
 function activate() {
@@ -27,10 +23,16 @@ function activate() {
       return;
     }
 
-    sang.emit('immunitaire:accepte', { senderId, text, canal, estAdmin: gate.isAdmin(senderId) });
+    sang.emit('immunitaire:accepte', {
+      senderId,
+      text: verdict.nettoye,
+      canal,
+      estWonder: recognition.isWonder(senderId),
+    });
   });
 
   console.log('[IMMUNITAIRE] Actif — en écoute sur le Sang.');
 }
 
 module.exports = { activate };
+
