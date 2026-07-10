@@ -3,35 +3,30 @@ const path = require('path');
 const crypto = require('crypto');
 
 function verify() {
-    const envPath = path.join(process.cwd(), '.env');
-    let seedContent = process.env.GENE_SEED_CONTENT;
-    let expectedHash = process.env.GENE_SEED_HASH;
-
-    // Si dotenv n'a pas encore tourné (comme dans ton index.js), on extrait manuellement les clés nécessaires
-    if (fs.existsSync(envPath) && (!seedContent || !expectedHash)) {
-        const envContent = fs.readFileSync(envPath, 'utf8');
-        const matchContent = envContent.match(/^GENE_SEED_CONTENT=(.*)$/m);
-        const matchHash = envContent.match(/^GENE_SEED_HASH=(.*)$/m);
-        
-        if (matchContent) seedContent = matchContent[1].trim();
-        if (matchHash) expectedHash = matchHash[1].trim();
-    }
-
     const seedPath = path.join(process.cwd(), '.geneseed');
-
-    // Création automatique du fichier physique pour Render
-    if (!fs.existsSync(seedPath) && seedContent) {
-        fs.writeFileSync(seedPath, seedContent.trim());
-    }
-
-    if (!expectedHash || !fs.existsSync(seedPath)) {
+    
+    if (!fs.existsSync(seedPath)) {
+        console.error("[GÈNE-SEED] Erreur : Fichier .geneseed introuvable.");
         return false;
     }
 
-    const content = fs.readFileSync(seedPath, 'utf8').trim();
-    const currentHash = crypto.createHash('sha256').update(content).digest('hex');
+    // On lit le fichier .geneseed
+    const rawContent = fs.readFileSync(seedPath, 'utf8');
+    
+    // On calcule le hash du contenu exact qui est sur ton GitHub (avec son saut de ligne automatique)
+    const currentHash = crypto.createHash('sha256').update(rawContent).digest('hex');
+    
+    // Le hash que ton Render attend (qui inclut le formatage de GitHub)
+    const expectedHash = "fcf0c5bc7c123a7f6289e1cd6a26ab2580b284716a449c6c47b4807e2bbf4ae7";
 
-    return currentHash === expectedHash;
+    if (currentHash !== expectedHash) {
+        console.error("[GÈNE-SEED] Erreur : Alignement génétique rompu.");
+        return false;
+    }
+
+    console.log("[GÈNE-SEED] Alignement parfait. Squelette activé.");
+    return true;
 }
 
 module.exports = { verify };
+
