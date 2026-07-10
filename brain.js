@@ -58,7 +58,7 @@ function activateBrain() {
             // ============================================================
             const sanitized = isSafeInput(text);
             if (!sanitized.safe) {
-                console.warn(`[NERF] Input dangereuse détectée : ${sanitized.reason}`);
+                console.warn(`[NERF] Input dangereuse détectée : ${sanitized.raison}`);
                 sang.emit('immunitaire:reject', { senderId, reason: 'TOXIC_INPUT' });
                 return;
             }
@@ -95,7 +95,7 @@ function activateBrain() {
             const contextualPrompt = buildContextualPrompt(
                 SYSTEM_PROMPT,
                 formattedHistory,
-                sanitized.text,
+                sanitized.nettoye,
                 metadata,
                 mediaType,
                 mediaPath
@@ -108,11 +108,11 @@ function activateBrain() {
             const thinking = await deepThink(
                 contextualPrompt,
                 metadata,
-                sanitized.text
+                sanitized.nettoye
             );
 
             console.log(`[NERF] Deep Think complété en ${Date.now() - startTime}ms`);
-            console.log(`[NERF] Analyse : ${thinking.analysis}`);
+            console.log(`[NERF] Analyse : ${JSON.stringify(thinking.analysis)}`);
 
             // ============================================================
             // ÉTAPE 5 : DÉCISION ET ACTION
@@ -125,7 +125,7 @@ function activateBrain() {
                     senderId,
                     isGroup ? groupId : null,
                     'user',
-                    sanitized.text
+                    sanitized.nettoye
                 );
             } catch (err) {
                 console.warn("[NERF] Enregistrement mémoire utilisateur échoué.", err.message);
