@@ -29,15 +29,13 @@ require('./security/immune').activate();
 require('./memory/mongo').connect();
 
 // ── ÉTAPE 4 — Démarrage du Pouls (le Sang vit dans le même organe) ──
-const { sang, start: demarrerPouls } = require('./core/heartbeat');
-demarrerPouls();
+const { sang } = require('./core/heartbeat');
 
 // ── ÉTAPE 5 — Connexion des Canaux (WhatsApp en priorité) ─────────
 require('./channels/whatsapp').connect();
 
 // ── ÉTAPE 6 — Activation du Nerf ──────────────────────────────────
-// TODO : require('./brain').activate()
+require('./brain').activateBrain();
 
-console.log('[SQUELETTE] Démarrage OK — étapes 1 à 5 actives + Immunitaire. Reste : Nerf.');
+console.log('[SQUELETTE] Démarrage OK — tous les systèmes actifs.');
 sang.emit('squelette:pret', { horodatage: new Date().toISOString() });
-
