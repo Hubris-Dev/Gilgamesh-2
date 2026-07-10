@@ -56,7 +56,7 @@ function activateBrain() {
             // ============================================================
             // ÉTAPE 1 : NETTOYAGE (Foie logique du Nerf)
             // ============================================================
-            const sanitized = sanitizeInput(text);
+            const sanitized = isSafeInput(text);
             if (!sanitized.safe) {
                 console.warn(`[NERF] Input dangereuse détectée : ${sanitized.reason}`);
                 sang.emit('immunitaire:reject', { senderId, reason: 'TOXIC_INPUT' });
