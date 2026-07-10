@@ -10,7 +10,7 @@ const { sang } = require('./core/heartbeat');
 const { resolveKryvenPulse, resolveGroqPulse } = require('./core/kryven-client');
 const { getMemory, appendMemory } = require('./memory/mongo');
 const { parseEstomac } = require('./utils/parser');
-const { sanitizeInput } = require('./security/filter');
+const {  isSafeInput } = require('./security/filter');
 
 // Charger l'identité — l'ADN du Nerf (Système Endocrinien)
 const SYSTEM_PROMPT_PATH = path.join(__dirname, 'core', 'system-prompt.txt');
