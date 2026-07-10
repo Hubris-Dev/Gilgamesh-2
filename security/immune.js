@@ -10,7 +10,7 @@
 
 const { sang } = require('../core/heartbeat');
 const recognition = ('../recognition');
-const filter = require('./security/filter');
+const filter = require('./filter');
 
 function activate() {
   sang.on('canal:message:recu', (payload = {}) => {
