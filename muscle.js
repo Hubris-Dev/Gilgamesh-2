@@ -6,16 +6,16 @@
 
 const { sang } = require('./core/heartbeat');
 const { getSocket } = require('./channels/whatsapp');
-const { isWonder } = require('./recognition');
+const { isWonder } = require('./security/recognition');
 
 function activateMuscle() {
-    console.log('[MUSCLE] Fibres activées. En attente d''intentions...');
+    console.log('[MUSCLE] Fibres activées. En attente d'intentions...');
     sang.on('intention:muscle', async (payload) => {
         const { target, command, args = {}, canal, demandedBy } = payload;
         console.log(`[MUSCLE] Intention reçue: ${command} → ${target}`);
         const commandesSensibles = ['block', 'unblock', 'kick', 'promote', 'demote', 'leave'];
         if (commandesSensibles.includes(command.toLowerCase()) && !isWonder(demandedBy)) {
-            console.warn(`[MUSCLE] Commande "${command}" refusée — ${target} n''est pas HUBRIS.`);
+            console.warn(`[MUSCLE] Commande "${command}" refusée — ${target} n'est pas HUBRIS.`);
             sang.emit('muscle:failed', { target, command, success: false, error: 'Autorisation refusée : commande réservée à HUBRIS.' });
             return;
         }
@@ -24,7 +24,7 @@ function activateMuscle() {
             sang.emit('muscle:executed', { target, command, success: true, result });
             console.log(`[MUSCLE] ${command} exécuté avec succès.`);
         } catch (err) {
-            console.error(`[MUSCLE] Erreur lors de l''exécution ${command}:`, err.message);
+            console.error(`[MUSCLE] Erreur lors de l'exécution ${command}:`, err.message);
             sang.emit('muscle:failed', { target, command, success: false, error: err.message });
         }
     });
