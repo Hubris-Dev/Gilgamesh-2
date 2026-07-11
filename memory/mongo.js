@@ -49,8 +49,8 @@ async function connect() {
     }
 }
 
+// Retourne db sans log (pour les polleurs comme waitForDb)
 function getDb() {
-    if (!db) console.warn('[MÉMOIRE] getDb() appelé avant connexion réussie — retourne null.');
     return db;
 }
 
@@ -78,7 +78,7 @@ async function getMemory(senderId, groupId = null, limit = 20) {
 }
 
 async function appendMemory(senderId, groupId = null, role, content) {
-    if (!db) { console.warn('[MÉMOIRE] DB indisponible, impossible de sauvegarder'); return false; }
+    if (!db) { console.warn('[MÉMOIRE] DB indisponible'); return false; }
     try {
         const collection = db.collection('conversations');
         await collection.insertOne({ senderId, groupId: groupId || null, role, content, timestamp: new Date() });
