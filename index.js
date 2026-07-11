@@ -35,10 +35,10 @@ scheduler.add('metabolisme-memoire', async () => {
 }, 5 * 60 * 1000);
 
 // → Système Musculaire
-require('./muscle').activeMuscle();
+require('../muscle').activeMuscle();
 
 // → Système Nerveux (Nerf)
-require('./brain').activeBrain();
+require('../brain').activeBrain();
 
 console.log('[SQUELETTE] Démarrage OK — tous les systèmes actifs.');
 sang.emit('squelette:pret', { horodatage: new Date().toISOString() });
