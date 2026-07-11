@@ -22,17 +22,31 @@ initializeKryvenClient();
 
 require('./channels/whatsapp').connect();
 
-// ← CORRIGÉ : activation du Système Musculaire
-require('./muscle').activateMuscle();
+// → Thyroide : rythme proactif
+const scheduler = require('./core/scheduler');
+scheduler.start();
+scheduler.add('nettoyeur-temp', async () => {
+  const { cleanNow } = require('./utils/cleanup');
+  const r = cleanNow();
+  if (r.deleted.length) console.log('[THYROIDE] Purge :', r.deleted.length, 'fichiers.');
+}, 60 * 60 * 1000);
+scheduler.add('metabolisme-memoire', async () => {
+  sang.emit('nerf:metabolismCheck', {});
+}, 5 * 60 * 1000);
 
-require('./brain').activateBrain();
+// → Système Musculaire
+require('./muscle').activeMuscle();
+
+// → Système Nerveux (Nerf)
+require('./brain').activeBrain();
 
 console.log('[SQUELETTE] Démarrage OK — tous les systèmes actifs.');
 sang.emit('squelette:pret', { horodatage: new Date().toISOString() });
 
-// ← CORRIGÉ : graceful shutdown
+// → Graceful shutdown
 function shutdown(signal) {
-  console.log(`[SQUELETTE] Signal ${signal} reçu — arrêt propre...`);
+  console.log('[SQUELETTE] Signal ' + signal + ' reçu — arrêt propre...');
+  scheduler.stop();
   const heartbeat = require('./core/heartbeat');
   const memoire = require('./memory/mongo');
   const whatsapp = require('./channels/whatsapp');
