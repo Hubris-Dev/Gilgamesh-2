@@ -7,6 +7,7 @@
 // PERSISTANCE — La session est mirrorée vers MongoDB sur CHAQUE creds.update,
 // pas seulement sur 'open'. Restauration non bloquante au démarrage.
 // Plus de waitForDb(), plus de dépendance MongoDB avant connexion.
+// CacheableSignalKeyStore, timeouts explicites, browser config.
 
 const path = require('node:path');
 const fs = require('node:fs');
@@ -15,7 +16,7 @@ const { parseMessageBrute } = require('../utils/parser');
 const { getDb } = require('../memory/mongo');
 
 const NOM_CANAL = 'whatsapp';
-const MAX_TENTATIVES_RECONNEXION = 5;
+const MAX_TENTATIVES_RECONNEXION = 10;
 const AUTH_DIR = path.join(process.cwd(), 'auth');
 
 let sock = null;
@@ -81,13 +82,16 @@ function requestPairingIfNeeded() {
 
   const tryPairing = (retry = 0) => {
     sock.requestPairingCode(numero)
-      .then(code => console.log('[WHATSAPP] Code de pairing : ' + code))
+      .then(code => {
+        console.log('[WHATSAPP] Code de pairing : ' + code);
+        sang.emit('canal:pairing', { canal: NOM_CANAL, code });
+      })
       .catch(e => {
         if (retry < 2) {
           console.warn('[WHATSAPP] Pairing tentative ' + (retry + 1) + '/3 échouée, retry 5s...');
           setTimeout(() => tryPairing(retry + 1), 5000);
         } else {
-          console.error('[WHATSAPP] Échec pairing après 3 tentatives :', e.message);
+          console.error('[WHATSAPP] Echec pairing après 3 tentatives :', e.message);
         }
       });
   };
@@ -107,6 +111,8 @@ function handleConnectionUpdate(update) {
     tentatives = 0;
     console.log('[WHATSAPP] Connecté — session valide.');
     sang.emit('canal:connecte', { canal: NOM_CANAL });
+    // Mirror immédiat vers MongoDB (sécurité)
+    mirrorToMongo();
   }
 
   if (connection === 'close') {
@@ -167,7 +173,7 @@ function setupListeners() {
 }
 
 async function reconnect() {
-  await new Promise(r => setTimeout(r, 3000));
+  await new Promise(r => setTimeout(r, 5000));
   connect();
 }
 
@@ -192,9 +198,9 @@ async function connect() {
       version,
       auth: {
         creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' })),
+        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
       },
-      logger: pino({ level: 'fatal' }),
+      logger: pino({ level: 'silent' }),
       printQRInTerminal: false,
       browser: ['Ubuntu', 'Chrome', '20.0.04'],
       markOnlineOnConnect: true,
@@ -202,10 +208,10 @@ async function connect() {
       defaultQueryTimeoutMs: 0,
     });
 
-    // Sauvegarde locale + mirror MongoDB à CHAQUE creds.update
+    // Sauvegarde locale + mirror MongoDB à chaque mise à jour
     sock.ev.on('creds.update', async (creds) => {
       await saveCreds(creds);
-      mirrorToMongo().catch(() => {});
+      mirrorToMongo().catch(() => {}); // Best effort, jamais de crash
     });
 
     sock.ev.on('connection.update', handleConnectionUpdate);
@@ -214,23 +220,35 @@ async function connect() {
     setupListeners();
     return sock;
   } catch (err) {
-    console.error('[WHATSAPP] Échec connexion :', err.message);
+    console.error('[WHATSAPP] Echec de connexion :', err.message);
     sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: err.message });
     return null;
   }
 }
 
-function getSocket() { return sock; }
+function getSocket() {
+  return sock;
+}
 
 async function cleanup() {
   sang.removeAllListeners('reponse:prete');
-  if (sock) { try { sock.ev.removeAllListeners(); } catch (_) {} sock = null; }
+  if (sock) {
+    try { sock.ev.removeAllListeners(); } catch (_) {}
+    sock = null;
+  }
+  console.log('[WHATSAPP] Nettoyé proprement.');
 }
 
-async function envoyer(destinataire, texte) {
-  if (!sock) return false;
-  try { await sock.sendMessage(destinataire, { text: texte }); return true; }
-  catch (err) { console.error('[WHATSAPP] Erreur envoi :', err.message); return false; }
+async function envoyer(destinataire, texte, isGroup = false) {
+  if (!sock) { console.warn('[WHATSAPP] Socket absent — envoi impossible.'); return false; }
+  try {
+    const jid = isGroup ? destinataire : destinataire + '@s.whatsapp.net';
+    await sock.sendMessage(jid, { text: texte });
+    return true;
+  } catch (err) {
+    console.error('[WHATSAPP] Erreur envoi :', err.message);
+    return false;
+  }
 }
 
 module.exports = { connect, reconnect, getSocket, cleanup, envoyer };
