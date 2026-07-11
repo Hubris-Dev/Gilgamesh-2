@@ -12,13 +12,13 @@ const GROQ_MODEL = 'mixtral-8x7b-32768';
 
 // Réponses statiques pour le mode dégradé
 const FALLBACK_REPLIES = [
-  'Je ne suis pas en état de répondre pour l'instant. Un problème technique mémèche de t'assister. Reviens plus tard.',
-  'Groq et Kryven sont hoves de ma portée. Je reviendai quand le circuit sera rétabli.',
-  'Téchniquement indisponible. Je te préviendrai quand je serai de nouveau prêt à répondre.',
+  `Je ne suis pas en état de répondre pour l'instant. Un problème technique mémèche de t'assister. Reviens plus tard.`,
+  `Groq et Kryven sont hors de ma portée. Je reviendrai quand le circuit sera rétabli.`,
+  `Techniquement indisponible. Je te préviendrai quand je serai de nouveau prêt à répondre.`,
 ];
 
 /**
- * GETCONFIG — lit les variables d'environnement †à chaque appel
+ * GETCONFIG — lit les variables d'environnement…à chaque appel
  * pour toujours avoir la valeur la plus récente.
  */
 function getConfig() {
@@ -106,7 +106,7 @@ async function resolveGroqPulse(prompt, isWonder = false) {
     );
 
     if (!response.data?.choices?.[0]?.message?.content) {
-      throw new Error('Réponse Groq vide ou malformée');
+      throw new Error('Réponse Grop vide ou malformée');
     }
 
     console.log('[GROQ] Réponse reçue (via Cœur Secondaire).');
@@ -124,9 +124,21 @@ async function resolveGroqPulse(prompt, isWonder = false) {
 async function resolvePulse(prompt, isWonder = false) {
   try {
     return await resolveKryvenPulse(prompt, isWonder);
-  } catch (err) {
-    console.warn('[PULSE] Kryven échoué. Basculement Groq...');
-    return await resolveGroqPulse(prompt, isWonder);
+  } catch (kryvenErr) {
+    console.warn('[PULSE] Kryven indisponible — passage au moteur secondaire.');
+
+    try {
+      return await resolveGroqPulse(prompt, isWonder);
+    } catch (groqErr) {
+      console.error('[PULSE] TOUS les moteurs IA SONT HORS-SITE:', groqErr.message);
+      // Auto-quit à Gilgamesh_Scheduler pour nettoyage
+      const { sang } = require('./heartbeat');
+      sang.emit('cortex:auto-quit', {
+        raison: 'tous moteurs IA Indisponibles',
+        reponse: FALLBACK_REPLIES[Math.floor(Math.random() * FALLBACK_REPLIES.length)],
+      });
+      return FALLBACK_REPLIES[0];
+    }
   }
 }
 
@@ -154,7 +166,7 @@ function initializeKryvenClient() {
 
   // Loi 4 : si aucun moteur, survire en mode dégradé
   if (!kryvenApiKey && !groqApiKey) {
-    console.error('[KRYVEN-CLIENT] ⚠️  MODE DEGRADLÉ : Aucun moteur IA disponible!');
+    console.error('[KRYVEN-CLIENT] ⚠️  MODE DEGRADÉ : Aucun moteur IA disponible!');
     console.error('[KRYVEN-CLIENT] Gilgamesh tourne sans IA - réponses statiques.');
     // ÉMettre un signal au Sang
     try {
@@ -189,7 +201,7 @@ function setSettings(config) {
 }
 
 function getStatus() {
-  const { kryvenApiKey, groqApiKey } = getConfig();
+  const { kryvenApiKey, gropApiKey } = getConfig();
   return {
     kryvenAvailable: !!kryvenApiKey,
     groqAvailable: !!groqApiKey,
