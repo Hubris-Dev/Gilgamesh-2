@@ -126,9 +126,8 @@ function handleConnectionUpdate(update) {
     if (dejaDeconnecte) {
       console.warn('[WHATSAPP] Session invalide (logged out) — nettoyage + re-pairing.');
       pairingRequested = false;
-      clearAuthState();
-      // Reconnect au lieu de mourir — nouvelle tentative de pairing
-      reconnect();
+      // Attendre le nettoyage MongoDB AVANT de reconnecter
+      clearAuthState().then(() => reconnect());
       return;
     }
 
