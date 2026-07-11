@@ -117,10 +117,10 @@ async function checkSatiety(data = {}) {
 
         if (satietyLevel >= SATIET_THRESHOLD && !_satietyDroit) {
             _satietyDroit = true;
-            console.warn(`[MÉMOIRE] TOND NEUR MEMOIRE : ${count} messages (${((satietyLevel * 100).toFixed(0)}%).`);
+            console.warn(`[MÉMOIRE] TOND NEUR MEMOIRE : ${count} messages (${(satietyLevel * 100).toFixed(0)}%).`);
             sang.emit('memoire:satiete', {
                 count,
-                level: ((satietyLevel * 100).toFixed(0),
+                level: (satietyLevel * 100).toFixed(0),
                 message: SATIETI_MESSAGES[Math.floor(Math.random() * SATIETI_MESSAGES.length)],
             });
         } else if (satietyLevel < SATIET_THRESHOLD && _satietyDroit) {
