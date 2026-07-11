@@ -20,6 +20,7 @@ const AUTH_DIR = path.join(process.cwd(), 'auth');
 let sock = null;
 let tentatives = 0;
 let saveCredsFn = null;
+let pairingRequested = false;
 
 // ─── Persistance Session via MongoDB (survit aux redéploiements) ──────
 
@@ -69,12 +70,30 @@ async function loadAuthState() {
 
 // ─── Handlers extraits (une seule instance, pas de fuite) ─────────────
 
+function requestPairingIfNeeded() {
+  if (pairingRequested) return;
+  if (!sock) return;
+  if (sock.authState && sock.authState.creds && sock.authState.creds.registered) return;
+  pairingRequested = true;
+  const numero = (process.env.BOT_WHATSAPP_NUMBER || '').replace(/[^\d]/g, '');
+  if (numero) {
+    sock.requestPairingCode(numero)
+      .then(code => console.log('[WHATSAPP] Code de pairing : ' + code))
+      .catch(e => console.error('[WHATSAPP] Échec pairing :', e.message));
+  } else {
+    console.warn('[WHATSAPP] BOT_WHATSAPP_NUMBER absent — QR nécessaire.');
+  }
+}
+
 function handleConnectionUpdate(update) {
   const { connection, lastDisconnect, qr } = update;
   const { DisconnectReason } = require('@whiskeysockets/baileys');
   const { Boom } = require('@hapi/boom');
 
   if (qr) console.log('[WHATSAPP] QR reçu (scan manuel nécessaire).');
+
+  // Dès que le socket tente de se connecter, demander le pairing code
+  if (connection === 'connecting') requestPairingIfNeeded();
 
   if (connection === 'open') {
     tentatives = 0;
@@ -92,6 +111,7 @@ function handleConnectionUpdate(update) {
 
     if (dejaDeconnecte) {
       console.error('[WHATSAPP] Session déconnectée (logged out) — re-pairing nécessaire.');
+      pairingRequested = false; // reset pour re-pairing
       (async () => {
         const db = getDb();
         if (db) await db.collection('auth_state').deleteOne({ _id: 'whatsapp_session' });
@@ -182,16 +202,6 @@ async function connect() {
       await saveCreds(creds);
       setTimeout(() => saveAuthState(), 5000);
     });
-
-    if (!sock.authState.creds.registered) {
-      const numero = (process.env.BOT_WHATSAPP_NUMBER || '').replace(/[^\d]/g, '');
-      if (numero) {
-        const code = await sock.requestPairingCode(numero);
-        console.log('[WHATSAPP] Code de pairing : ' + code);
-      } else {
-        console.warn('[WHATSAPP] BOT_WHATSAPP_NUMBER absent — QR nécessaire.');
-      }
-    }
 
     sock.ev.on('connection.update', handleConnectionUpdate);
     sock.ev.on('messages.upsert', handleMessagesUpsert);
