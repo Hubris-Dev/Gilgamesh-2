@@ -9,7 +9,7 @@
 //            'immunitaire:bloque'   { senderId, raison, canal }
 
 const { sang } = require('../core/heartbeat');
-const recognition = require('../recognition');   // ← CORRIGÉ : require manquant
+const recognition = require('./recognition');   // ← recognition.js déplacé dans security/
 const filter = require('./filter');
 
 function activate() {
