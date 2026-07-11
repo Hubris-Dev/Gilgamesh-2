@@ -1,217 +1,227 @@
 // channels/whatsapp.js
 // Système Respiratoire — Canal WhatsApp (Baileys)
-// RÔLE : parler, écouter. Capte le brut, le passe à l'Estomac (utils/parser.js)
-// pour extraction, puis émet sur le Sang. Ne sanitize rien, ne pense rien.
+// RÔLE : parler, écouter. Capte le brut, le passe à l'Estomac pour
+// extraction, puis émet sur le Sang. Ne sanitize rien, ne pense rien.
 // Voir CODEX, Système 7.
 //
-// CORRIGÉ : le handler connection.update est extrait de connect() pour éviter
-// la fuite de listeners à chaque reconnexion. getSocket() exposé pour le Muscle.
+// PERSISTANCE GRATUITE : la session WhatsApp est sauvegardée dans MongoDB
+// Atlas pour survivre aux redéploiements Render (pas de disque nécessaire).
 
 const path = require('node:path');
+const fs = require('node:fs');
 const { sang } = require('../core/heartbeat');
 const { parseMessageBrute } = require('../utils/parser');
+const { getDb } = require('../memory/mongo');
 
 const NOM_CANAL = 'whatsapp';
 const MAX_TENTATIVES_RECONNEXION = 5;
+const AUTH_DIR = path.join(process.cwd(), 'auth');
 
 let sock = null;
 let tentatives = 0;
 let saveCredsFn = null;
 
-// ── Handlers extraits (une seule instance, pas de fuite) ──────────
+// ─── Persistance Session via MongoDB (survit aux redéploiements) ──────
+
+async function waitForDb(timeoutMs = 15000) {
+  const debut = Date.now();
+  while (Date.now() - debut < timeoutMs) {
+    const db = getDb();
+    if (db) return db;
+    await new Promise(r => setTimeout(r, 800));
+  }
+  return null;
+}
+
+async function saveAuthState() {
+  const db = await waitForDb();
+  if (!db) { console.warn('[WHATSAPP] Mongo pas prêt — session non sauvegardée.'); return; }
+  try {
+    const credsPath = path.join(AUTH_DIR, 'creds.json');
+    if (!fs.existsSync(credsPath)) return;
+    const credsData = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+    await db.collection('auth_state').updateOne(
+      { _id: 'whatsapp_session' },
+      { $set: { creds: credsData, misAJour: new Date() } },
+      { upsert: true }
+    );
+    console.log('[WHATSAPP] Session sauvegardée dans MongoDB.');
+  } catch (err) {
+    console.warn('[WHATSAPP] Sauvegarde session Mongo échouée :', err.message);
+  }
+}
+
+async function loadAuthState() {
+  const db = getDb();
+  if (!db) { console.log('[WHATSAPP] Mongo pas encore connecté — session fraîche.'); return false; }
+  try {
+    const doc = await db.collection('auth_state').findOne({ _id: 'whatsapp_session' });
+    if (!doc || !doc.creds) return false;
+    if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
+    fs.writeFileSync(path.join(AUTH_DIR, 'creds.json'), JSON.stringify(doc.creds, null, 2));
+    console.log('[WHATSAPP] Session restaurée depuis MongoDB !');
+    return true;
+  } catch (err) {
+    console.warn('[WHATSAPP] Restauration session Mongo échouée :', err.message);
+    return false;
+  }
+}
+
+// ─── Handlers extraits (une seule instance, pas de fuite) ─────────────
 
 function handleConnectionUpdate(update) {
-    const { connection, lastDisconnect, qr } = update;
-    const { DisconnectReason } = require('@whiskeysockets/baileys');
-    const { Boom } = require('@hapi/boom');
+  const { connection, lastDisconnect, qr } = update;
+  const { DisconnectReason } = require('@whiskeysockets/baileys');
+  const { Boom } = require('@hapi/boom');
 
-    if (qr) {
-        console.log('[WHATSAPP] QR reçu (scan manuel nécessaire).');
+  if (qr) console.log('[WHATSAPP] QR reçu (scan manuel nécessaire).');
+
+  if (connection === 'open') {
+    tentatives = 0;
+    console.log('[WHATSAPP] Connecté.');
+    sang.emit('canal:connecte', { canal: NOM_CANAL });
+    setTimeout(() => saveAuthState(), 3000);
+  }
+
+  if (connection === 'close') {
+    const codeErreur = lastDisconnect?.error instanceof Boom
+      ? lastDisconnect.error.output?.statusCode : null;
+    const dejaDeconnecte = codeErreur === DisconnectReason.loggedOut;
+
+    sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: lastDisconnect?.error?.message });
+
+    if (dejaDeconnecte) {
+      console.error('[WHATSAPP] Session déconnectée (logged out) — re-pairing nécessaire.');
+      (async () => {
+        const db = getDb();
+        if (db) await db.collection('auth_state').deleteOne({ _id: 'whatsapp_session' });
+      })();
+      return;
     }
 
-    if (connection === 'open') {
-        tentatives = 0;
-        console.log('[WHATSAPP] Connecté.');
-        sang.emit('canal:connecte', { canal: NOM_CANAL });
+    tentatives += 1;
+    if (tentatives > MAX_TENTATIVES_RECONNEXION) {
+      console.error('[WHATSAPP] ' + MAX_TENTATIVES_RECONNEXION + ' échecs — Loi 7, on arrête.');
+      return;
     }
 
-    if (connection === 'close') {
-        const codeErreur = lastDisconnect?.error instanceof Boom
-            ? lastDisconnect.error.output?.statusCode
-            : null;
-        const dejaDeconnecte = codeErreur === DisconnectReason.loggedOut;
-
-        sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: lastDisconnect?.error?.message });
-
-        if (dejaDeconnecte) {
-            console.error('[WHATSAPP] Session déconnectée (logged out) — re-pairing nécessaire.');
-            return;
-        }
-
-        tentatives += 1;
-        if (tentatives > MAX_TENTATIVES_RECONNEXION) {
-            console.error(`[WHATSAPP] ${MAX_TENTATIVES_RECONNEXION} échecs — Loi 7, on arrête.`);
-            return;
-        }
-
-        console.warn(`[WHATSAPP] Connexion perdue — tentative ${tentatives}/${MAX_TENTATIVES_RECONNEXION}.`);
-        reconnect();
-    }
+    console.warn('[WHATSAPP] Connexion perdue — tentative ' + tentatives + '/' + MAX_TENTATIVES_RECONNEXION + '.');
+    reconnect();
+  }
 }
 
 function handleMessagesUpsert({ messages }) {
-    for (const msgBrut of messages) {
-        const propre = parseMessageBrute(msgBrut);
-        if (!propre || !propre.text) continue;
+  for (const msgBrut of messages) {
+    const propre = parseMessageBrute(msgBrut);
+    if (!propre || !propre.text) continue;
 
-        const remoteJid = msgBrut.key.remoteJid || '';
-        const isGroup = remoteJid.endsWith('@g.us');
+    const remoteJid = msgBrut.key.remoteJid || '';
+    const isGroup = remoteJid.endsWith('@g.us');
 
-        sang.emit('canal:message:recu', {
-            senderId: propre.sender,
-            text: propre.text,
-            canal: NOM_CANAL,
-            messageId: propre.messageId,
-            senderName: propre.nomAffiche,
-            isGroup,
-            groupId: isGroup ? remoteJid : null,
-            mediaType: null,
-            mediaPath: null,
-        });
-    }
+    sang.emit('canal:message:recu', {
+      senderId: propre.sender,
+      text: propre.text,
+      canal: NOM_CANAL,
+      messageId: propre.messageId,
+      senderName: propre.nomAffiche,
+      isGroup,
+      groupId: isGroup ? remoteJid : null,
+      mediaType: null,
+      mediaPath: null,
+    });
+  }
 }
 
 async function handleReponsePrete(payload) {
-    try {
-        const { target, text, isGroup } = payload;
-        if (!sock || !target || !text) {
-            console.warn('[WHATSAPP] Payload réponse incomplet ou socket fermé.');
-            return;
-        }
-
-        const destinataireId = isGroup ? target : `${target}@s.whatsapp.net`;
-        await sock.sendMessage(destinataireId, { text });
-        console.log(`[WHATSAPP] Réponse envoyée à ${destinataireId}`);
-    } catch (err) {
-        console.error("[WHATSAPP] Erreur lors de l'envoi de la réponse :", err.message);
-    }
+  try {
+    const { target, text, isGroup } = payload;
+    if (!sock || !target || !text) { console.warn('[WHATSAPP] Payload réponse incomplet.'); return; }
+    const destinataireId = isGroup ? target : target + '@s.whatsapp.net';
+    await sock.sendMessage(destinataireId, { text });
+    console.log('[WHATSAPP] Réponse envoyée à ' + destinataireId);
+  } catch (err) {
+    console.error('[WHATSAPP] Erreur envoi réponse :', err.message);
+  }
 }
 
-// ── Connexion / Reconnexion ────────────────────────────────────────
+// ─── Connexion / Reconnexion ──────────────────────────────────────────
 
-async function connect() {
-    try {
-        const {
-            default: makeWASocket,
-            useMultiFileAuthState,
-            fetchLatestBaileysVersion,
-        } = require('@whiskeysockets/baileys');
-        const pino = require('pino');
-
-        const dossierAuth = path.join(process.cwd(), 'auth');
-        const { state, saveCreds } = await useMultiFileAuthState(dossierAuth);
-        const { version } = await fetchLatestBaileysVersion();
-
-        saveCredsFn = saveCreds;
-
-        if (sock) {
-            try { sock.end(); } catch (_) { /* ignore */ }
-        }
-
-        sock = makeWASocket({
-            version,
-            auth: state,
-            logger: pino({ level: 'silent' }),
-            printQRInTerminal: false,
-        });
-
-        sock.ev.on('creds.update', saveCredsFn);
-        sock.ev.on('connection.update', handleConnectionUpdate);
-        sock.ev.on('messages.upsert', handleMessagesUpsert);
-        sang.on('reponse:prete', handleReponsePrete);
-
-        if (!sock.authState.creds.registered) {
-            const numero = (process.env.BOT_WHATSAPP_NUMBER || '').replace(/[^\d]/g, '');
-            if (numero) {
-                const code = await sock.requestPairingCode(numero);
-                console.log(`[WHATSAPP] Code de pairing : ${code}`);
-            } else {
-                console.warn('[WHATSAPP] BOT_WHATSAPP_NUMBER absent — QR nécessaire.');
-            }
-        }
-
-        return sock;
-    } catch (err) {
-        console.error('[WHATSAPP] Échec de connexion :', err.message);
-        sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: err.message });
-        return null;
-    }
+function setupListeners() {
+  sang.removeAllListeners('reponse:prete');
+  sang.on('reponse:prete', handleReponsePrete);
 }
 
 async function reconnect() {
-    try {
-        const {
-            default: makeWASocket,
-            useMultiFileAuthState,
-            fetchLatestBaileysVersion,
-        } = require('@whiskeysockets/baileys');
-        const pino = require('pino');
+  await new Promise(r => setTimeout(r, 3000));
+  connect();
+}
 
-        const dossierAuth = path.join(process.cwd(), 'auth');
-        const { state, saveCreds } = await useMultiFileAuthState(dossierAuth);
-        const { version } = await fetchLatestBaileysVersion();
+async function connect() {
+  try {
+    const {
+      default: makeWASocket,
+      useMultiFileAuthState,
+      fetchLatestBaileysVersion,
+    } = require('@whiskeysockets/baileys');
+    const pino = require('pino');
 
-        saveCredsFn = saveCreds;
+    await loadAuthState();
 
-        if (sock) {
-            try { sock.ev.removeAllListeners(); sock.end(); } catch (_) { /* ignore */ }
-        }
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+    saveCredsFn = saveCreds;
+    const { version } = await fetchLatestBaileysVersion();
 
-        sock = makeWASocket({
-            version,
-            auth: state,
-            logger: pino({ level: 'silent' }),
-            printQRInTerminal: false,
-        });
+    sock = makeWASocket({
+      version,
+      auth: state,
+      logger: pino({ level: 'silent' }),
+      printQRInTerminal: false,
+    });
 
-        sock.ev.on('creds.update', saveCredsFn);
-        sock.ev.on('connection.update', handleConnectionUpdate);
-        sock.ev.on('messages.upsert', handleMessagesUpsert);
+    sock.ev.on('creds.update', async (creds) => {
+      await saveCreds(creds);
+      setTimeout(() => saveAuthState(), 5000);
+    });
 
-        if (!sock.authState.creds.registered) {
-            const numero = (process.env.BOT_WHATSAPP_NUMBER || '').replace(/[^\d]/g, '');
-            if (numero) {
-                const code = await sock.requestPairingCode(numero);
-                console.log(`[WHATSAPP] Code de pairing : ${code}`);
-            }
-        }
-
-        return sock;
-    } catch (err) {
-        console.error('[WHATSAPP] Échec reconnexion :', err.message);
-        return null;
+    if (!sock.authState.creds.registered) {
+      const numero = (process.env.BOT_WHATSAPP_NUMBER || '').replace(/[^\d]/g, '');
+      if (numero) {
+        const code = await sock.requestPairingCode(numero);
+        console.log('[WHATSAPP] Code de pairing : ' + code);
+      } else {
+        console.warn('[WHATSAPP] BOT_WHATSAPP_NUMBER absent — QR nécessaire.');
+      }
     }
+
+    sock.ev.on('connection.update', handleConnectionUpdate);
+    sock.ev.on('messages.upsert', handleMessagesUpsert);
+
+    setupListeners();
+    return sock;
+  } catch (err) {
+    console.error('[WHATSAPP] Échec de connexion :', err.message);
+    sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: err.message });
+    return null;
+  }
 }
 
 function getSocket() {
-    return sock;
+  return sock;
+}
+
+async function cleanup() {
+  sang.removeAllListeners('reponse:prete');
+  if (sock) {
+    try { sock.ev.removeAllListeners(); } catch (_) { /* ignore */ }
+    sock = null;
+  }
+  console.log('[WHATSAPP] Nettoyé proprement.');
 }
 
 async function envoyer(destinataireId, texte) {
-    if (!sock) {
-        console.error('[WHATSAPP] envoyer() appelé mais pas encore connecté.');
-        return false;
-    }
-    await sock.sendMessage(destinataireId, { text: texte });
-    return true;
-}
-
-function cleanup() {
-    if (sock) {
-        try { sock.ev.removeAllListeners(); sock.end(); } catch (_) { /* ignore */ }
-        sock = null;
-    }
-    sang.removeListener('reponse:prete', handleReponsePrete);
+  if (!sock) { console.error('[WHATSAPP] envoyer() appelé mais pas connecté.'); return false; }
+  await sock.sendMessage(destinataireId, { text: texte });
+  return true;
 }
 
 module.exports = { connect, envoyer, getSocket, cleanup };
