@@ -9,7 +9,7 @@ const { getSocket } = require('./channels/whatsapp');
 const { isWonder } = require('./security/recognition');
 
 function activateMuscle() {
-    console.log('[MUSCLE] Fibres activées. En attente d'intentions...');
+    console.log('[MUSCLE] Fibres activées. En attente d intentions...');
     sang.on('intention:muscle', async (payload) => {
         const { target, command, args = {}, canal, demandedBy } = payload;
         console.log(`[MUSCLE] Intention reçue: ${command} → ${target}`);
