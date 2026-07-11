@@ -15,7 +15,7 @@ const { isSafeInput } = require('./security/filter');
 
 // Charger l'identité — l'ADN du Nerf (Système Endocrinien)
 const SYSTEM_PROMPT_PATH = path.join(__dirname, 'core', 'system-prompt.txt');
-let SYSTEM_PROMPT: string = ';
+let SYSTEM_PROMPT = '';
 // Identité de secours en cas de fichier system-prompt.txt manquant.
 // Loi 4 : les pannes externes ne tuent pas Gilgamesh.
 const FALLBACK_IDENTITY = `Tu es Gilgamesh, premier Duc du Codex, Trône de l'Orgueil.
@@ -350,15 +350,7 @@ function buildDecisionPrompt(contextualPrompt, analysis, metadata, originalText)
 
   prompt += `\n`;
   prompt += `DÉCIDE EN JSON STRICT (pas de texte avant/après) :\n`;
-  prompt += `{
-    "actionType": "reply|ignore|execute",
-    "replyContent": "(si reply) Ton message de réponse, avec ton et personnalité",
-    "command": "(si execute) Commande à exécuter (block, unblock, mute, unmute, etc)",
-    "args": {"clé": "valeur", ...},
-    "mediaType": "text|voice|image|null",
-    "mediaContent": "(si média) contenu ou chemin",
-    "reasoning": "Pourquoi cette décision?"
-  }`;
+  prompt += `{\n    "actionType": "reply|ignore|execute",\n    "replyContent": "(si reply) Ton message de réponse, avec ton et personnalité",\n    "command": "(si execute) Commande à exécuter (block, unblock, mute, unmute, etc)",\n    "args": {"clé": "valeur", ...},\n    "mediaType": "text|voice|image|null",\n    "mediaContent": "(si média) contenu ou chemin",\n    "reasoning": "Pourquoi cette décision?"\n  }`;
 
   return prompt;
 }
