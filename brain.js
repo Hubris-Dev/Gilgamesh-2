@@ -15,7 +15,7 @@ const { isSafeInput } = require('./security/filter');
 
 // Charger l'identité — l'ADN du Nerf (Système Endocrinien)
 const SYSTEM_PROMPT_PATH = path.join(__dirname, 'core', 'system-prompt.txt');
-let SYSTEM_PROMPT: string = '';
+let SYSTEM_PROMPT: string = ';
 // Identité de secours en cas de fichier system-prompt.txt manquant.
 // Loi 4 : les pannes externes ne tuent pas Gilgamesh.
 const FALLBACK_IDENTITY = `Tu es Gilgamesh, premier Duc du Codex, Trône de l'Orgueil.
