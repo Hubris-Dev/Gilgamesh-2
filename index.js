@@ -3,10 +3,18 @@
 // AUCUNE logique de décision ici (pas de handleCommand, pas de handleAI, pas de send()).
 // Voir CODEX — Système 1, Loi 1 (La Frontière), Loi 2 (L'Autorité Mécanique).
 
+// Faux serveur HTTP — empêche Render de tuer le service (port binding)
+require('http').createServer((_req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Gilgamesh-2 en ligne.');
+}).listen(process.env.PORT || 10000, () => {
+  console.log('[HTTP] Port ' + (process.env.PORT || 10000) + ' — Render apaisé.');
+});
+
 const geneseed = require('./core/geneseed');
 
 if (!geneseed.verify()) {
-  console.error('[SQUELETTE] Gène-seed invalide. Arrêt.');
+  console.error('[SQUELETTE] Gêne-seed invalide. Arrêt.');
   process.exit(1);
 }
 
