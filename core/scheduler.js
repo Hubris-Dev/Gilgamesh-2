@@ -9,8 +9,6 @@
 // Loi 6 : la Thyroïde influence le rythme — elle ne dicte pas.
 // Programmation du rythme, pas de contrainte décisionnelle.
 
-const setInterval = setInterval;
-
 // État
 let _tasks = [];
 let _sang = null;
