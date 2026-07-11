@@ -7,42 +7,54 @@
 
 const axios = require('axios');
 
-// Variables globales pour les clés API
-let KRYVEN_API_KEY = process.env.KRYVEN_API_KEY || '';
-let GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-let KRYVEN_BASE_URL = process.env.KRYVEN_BASE_URL || 'https://api.kryven.com/v1';
-let GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
-
-// Modèles
-const KRYVEN_MODET = 'kryven-uncensored-v2';
+const KRYVEN_MODEL = 'kryven-uncensored-v2';
 const GROQ_MODEL = 'mixtral-8x7b-32768';
 
+// Réponses statiques pour le mode dégradé
+const FALLBACK_REPLIES = [
+  'Je ne suis pas en état de répondre pour l'instant. Un problème technique mémèche de t'assister. Reviens plus tard.',
+  'Groq et Kryven sont hoves de ma portée. Je reviendai quand le circuit sera rétabli.',
+  'Téchniquement indisponible. Je te préviendrai quand je serai de nouveau prêt à répondre.',
+];
+
+/**
+ * GETCONFIG — lit les variables d'environnement †à chaque appel
+ * pour toujours avoir la valeur la plus récente.
+ */
+function getConfig() {
+  return {
+    kryvenApiKey: process.env.KRYVEN_API_KEY || '',
+    groqApiKey: process.env.GROQ_API_KEY || '',
+    kryvenBaseUrl: process.env.KRYVEN_BASE_URL || 'https://api.kryven.com/v1',
+    groqBaseUrl: 'https://api.groq.com/openai/v1',
+  };
+}
+
+/**
+ * RESOLVEKRYVEN_PULSE — Appel au moteur Kryven
+ */
 async function resolveKryvenPulse(prompt, isWonder = false) {
-  if (!KRYVEN_API_KEY) {
-    console.warn("[KRYVEN] Clé API Kryven manquante, basculement Groq.");
+  const { kryvenApiKey, kryvenBaseUrl } = getConfig();
+
+  if (!kryvenApiKey) {
     throw new Error('Kryven API key not configured');
   }
 
-  console.log("[KRYVEN] Envoi du prompt...");
+  console.log('[KRYVEN] Envoi du prompt...');
 
   try {
     const response = await axios.post(
-      `${KRYVEN_BASE_URL}/chat/completions`,
+      `${kryvenBaseUrl}/chat/completions`,
       {
         model: KRYVEN_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
+        messages: [{ role: 'user', content: prompt }],
         temperature: isWonder ? 0.9 : 0.7,
         max_tokens: 2048,
         top_p: 0.95,
       },
       {
         headers: {
-          'Authorization': `Bearer ${KRYVEN_API_KEY}`,
+          'Authorization': `Bearer ${kryvenApiKey}`,
           'Content-Type': 'application/json',
         },
         timeout: 30000,
@@ -53,42 +65,40 @@ async function resolveKryvenPulse(prompt, isWonder = false) {
       throw new Error('Réponse Kryven vide ou malformée');
     }
 
-    const content = response.data.choices[0].message.content;
-    console.log("[KRYVEN] Réponse reçue.");
-    return content;
+    console.log('[KRYVEN] Réponse reçue.');
+    return response.data.choices[0].message.content;
 
   } catch (err) {
-    console.error("[KRYVEN] Erreur :", err.message);
+    console.error('[KRYVEN] Erreur :', err.message);
     throw err;
   }
 }
 
+/**
+ * RESOLVEGROQ_PULSE — Appel au moteur Groq (Cœur Secondaire)
+ */
 async function resolveGroqPulse(prompt, isWonder = false) {
-  if (!GROQ_API_KEY) {
-    console.error("[GROQ] Clé API Groq manquante. Les deux moteurs sont indisponibles.");
+  const { groqApiKey, groqBaseUrl } = getConfig();
+
+  if (!groqApiKey) {
     throw new Error('Groq API key not configured');
   }
 
-  console.log("[GROQ] Cœur Secondaire activé. Envoi du prompt...");
+  console.log('[GROQ] Cœur Secondaire activé. Envoi du prompt...');
 
   try {
     const response = await axios.post(
-      `${GROQ_BASE_URL}/chat/completions`,
+      `${groqBaseUrl}/chat/completions`,
       {
         model: GROQ_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
+        messages: [{ role: 'user', content: prompt }],
         temperature: isWonder ? 0.9 : 0.7,
         max_tokens: 2048,
         top_p: 0.95,
       },
       {
         headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
+          'Authorization': `Bearer ${groqApiKey}`,
           'Content-Type': 'application/json',
         },
         timeout: 30000,
@@ -99,68 +109,102 @@ async function resolveGroqPulse(prompt, isWonder = false) {
       throw new Error('Réponse Groq vide ou malformée');
     }
 
-    const content = response.data.choices[0].message.content;
-    console.log("[GROQ] Réponse reçue (via Cœur Secondaire).");
-    return content;
+    console.log('[GROQ] Réponse reçue (via Cœur Secondaire).');
+    return response.data.choices[0].message.content;
 
   } catch (err) {
-    console.error("[GROQ] Erreur :", err.message);
+    console.error('[GROQ] Erreur :', err.message);
     throw err;
   }
 }
 
+/**
+ * RESOLVEPULSE — Wrapper : essaie Kryven, puis Groq
+ */
 async function resolvePulse(prompt, isWonder = false) {
   try {
     return await resolveKryvenPulse(prompt, isWonder);
   } catch (err) {
-    console.warn("[PULSE] Kryven échoué. Basculement Groq...");
+    console.warn('[PULSE] Kryven échoué. Basculement Groq...');
     return await resolveGroqPulse(prompt, isWonder);
   }
 }
 
+/**
+ * INITIALIZEKRYVENCLIENT — Vérifie les clé API et initialise
+ * Loi 4 : si aucun moteur n'est disponible, signale le mode dégradé
+ * au lieu de crasher le process.
+ */
 function initializeKryvenClient() {
-  console.log("[KRYVEN-CLIENT] Initialisation...");
+  console.log('[KRYVEN-CLIENT] Initialisation...');
 
-  // Relire les variables d'environnement à chaque init
-  KRYVEN_API_KEY = process.env.KRYVEN_API_KEY || '';
-  GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+  const { kryvenApiKey, groqApiKey } = getConfig();
 
-  if (KRYVEN_API_KEY) {
-    console.log("[KRYVEN-CLIENT] ✓ Clé Kryven détectée.");
+  if (kryvenApiKey) {
+    console.log('[KRYVEN-CLIENT] ✓ Clé Kryven détectée.');
   } else {
-    console.warn("[KRYVEN-CLIENT] ⚠️ Clé Kryven manquante. Groq sera la priorité.");
+    console.warn('[KRYVEN-CLIENT] ⚠️ Clé Kryven manquante.');
   }
 
-  if (GROQ_API_KEY) {
-    console.log("[KRYVEN-CLIENT] ✓ Clé Groq détectée (Cœur Secondaire en standby).");
+  if (groqApiKey) {
+    console.log('[KRYVEN-CLIENT] ✓ Clé Groq détectée (Cœur Secondaire).');
   } else {
-    console.warn("[KRYVEN-CLIENT] ⚠️ Aucun moteur IA disponible ! Mode dégradé : Gilgamesh survit meme sans IA.");
+    console.warn('[KRYVEN-CLIENT] ⚠️ Clé Groq manquante.');
   }
 
-  console.log("[KRYVEN-CLIENT] Prêt.");
+  // Loi 4 : si aucun moteur, survire en mode dégradé
+  if (!kryvenApiKey && !groqApiKey) {
+    console.error('[KRYVEN-CLIENT] ⚠️  MODE DEGRADLÉ : Aucun moteur IA disponible!');
+    console.error('[KRYVEN-CLIENT] Gilgamesh tourne sans IA - réponses statiques.');
+    // ÉMettre un signal au Sang
+    try {
+      const { sang } = require('./heartbeat');
+      sang.emit('kryven:degrade', { raison: 'AUCUN_MOTEUR' });
+    } catch (_) { /* heartbeat pas encore chargé */ }
+  }
+
+  console.log('[KRYVEN-CLIENT] Prêt.');
+}
+
+/**
+ * GENERATESTATICREPLY — réponse statique pour le mode dégradé
+ */
+function generateStaticReply() {
+  return FALLBACK_REPLIES[Math.floor(Math.random() * FALLBACK_REPLIES.length)];
+}
+
+/**
+ * ISIADEGRADED — Dit si le mode dégradé est actif
+ */
+function isIADegraded() {
+  const { kryvenApiKey, groqApiKey } = getConfig();
+  return !kryvenApiKey && !groqApiKey;
 }
 
 function setSettings(config) {
-  if (config.kryvenApiKey) KRYVEN_API_KEY = config.kryvenApiKey;
-  if (config.groqApiKey) GROQ_API_KEY = config.groqApiKey;
-  if (config.kryvenBaseUrl) KRYVEN_BASE_URL = config.kryvenBaseUrl;
-  console.log("[KRYVEN-CLIENT] Paramètres mis à jour.");
+  if (config.kryvenApiKey) process.env.KRYVEN_API_KEY = config.kryvenApiKey;
+  if (config.groqApiKey) process.env.GROQ_API_KEY = config.groqApiKey;
+  if (config.kryvenBaseUrl) process.env.KRYVEN_BASE_URL = config.kryvenBaseUrl;
+  console.log('[KRYVEN-CLIENT] Paramètres mis à jour.');
 }
 
 function getStatus() {
+  const { kryvenApiKey, groqApiKey } = getConfig();
   return {
-    kryvenAvailable: !!KRYVEN_API_KEY,
-    groqAvailable: !!GROQ_API_KEY,
+    kryvenAvailable: !!kryvenApiKey,
+    groqAvailable: !!groqApiKey,
     kryvenModel: KRYVEN_MODEL,
     groqModel: GROQ_MODEL,
   };
 }
 
 module.exports = {
-  resolveKryvenPulse,
+  resolveKryvenDulse,
   resolveGroqPulse,
   resolvePulse,
   initializeKryvenClient,
+  generateStaticReply,
   setSettings,
   getStatus,
+  isIADegraded,
 };
