@@ -92,16 +92,16 @@ function requestPairingIfNeeded() {
           setTimeout(() => tryPairing(retry + 1), 5000);
         } else {
           console.error('[WHATSAPP] Echec pairing après 3 tentatives :', e.message);
+          pairingRequested = false; // Allow retry on next reconnect
         }
       });
   };
-  setTimeout(() => tryPairing(), 4000);
+  // Immédiat — pas de délai, le 'connecting' est le bon moment
+  tryPairing();
 }
 
 function handleConnectionUpdate(update) {
   const { connection, lastDisconnect, qr } = update;
-  const { DisconnectReason } = require('@whiskeysockets/baileys');
-  const { Boom } = require('@hapi/boom');
 
   if (qr) console.log('[WHATSAPP] QR reçu (fallback scan manuel).');
 
@@ -111,11 +111,12 @@ function handleConnectionUpdate(update) {
     tentatives = 0;
     console.log('[WHATSAPP] Connecté — session valide.');
     sang.emit('canal:connecte', { canal: NOM_CANAL });
-    // Mirror immédiat vers MongoDB (sécurité)
     mirrorToMongo();
   }
 
   if (connection === 'close') {
+    const { DisconnectReason } = require('@whiskeysockets/baileys');
+    const { Boom } = require('@hapi/boom');
     const codeErreur = lastDisconnect?.error instanceof Boom
       ? lastDisconnect.error.output?.statusCode : null;
     const dejaDeconnecte = codeErreur === DisconnectReason.loggedOut;
@@ -123,9 +124,11 @@ function handleConnectionUpdate(update) {
     sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: lastDisconnect?.error?.message });
 
     if (dejaDeconnecte) {
-      console.error('[WHATSAPP] Session invalide (logged out) — nettoyage + re-pairing.');
+      console.warn('[WHATSAPP] Session invalide (logged out) — nettoyage + re-pairing.');
       pairingRequested = false;
       clearAuthState();
+      // Reconnect au lieu de mourir — nouvelle tentative de pairing
+      reconnect();
       return;
     }
 
@@ -187,8 +190,8 @@ async function connect() {
     } = require('@whiskeysockets/baileys');
     const pino = require('pino');
 
-    // Restauration non bloquante
-    restoreFromMongo();
+    // Restauration MongoDB AVANT la lecture locale — évite les conflits d'état
+    await restoreFromMongo();
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     saveCredsFn = saveCreds;
@@ -204,14 +207,14 @@ async function connect() {
       printQRInTerminal: false,
       browser: ['Ubuntu', 'Chrome', '20.0.04'],
       markOnlineOnConnect: true,
-      connectTimeoutMs: 60000,
+      connectTimeoutMs: 120000,
       defaultQueryTimeoutMs: 0,
     });
 
     // Sauvegarde locale + mirror MongoDB à chaque mise à jour
     sock.ev.on('creds.update', async (creds) => {
       await saveCreds(creds);
-      mirrorToMongo().catch(() => {}); // Best effort, jamais de crash
+      mirrorToMongo().catch(() => {});
     });
 
     sock.ev.on('connection.update', handleConnectionUpdate);
