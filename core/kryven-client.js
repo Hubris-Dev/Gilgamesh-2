@@ -199,7 +199,7 @@ function getStatus() {
 }
 
 module.exports = {
-  resolveKryvenDulse,
+  resolveKryvenPulse,
   resolveGroqPulse,
   resolvePulse,
   initializeKryvenClient,
