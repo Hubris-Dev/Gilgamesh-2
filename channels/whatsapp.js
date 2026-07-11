@@ -6,6 +6,7 @@
 //
 // PERSISTANCE GRATUITE : la session WhatsApp est sauvegardée dans MongoDB
 // Atlas pour survivre aux redéploiements Render (pas de disque nécessaire).
+// Sauvegarde UNIQUEMENT après connection === 'open' (pairing confirmé).
 
 const path = require('node:path');
 const fs = require('node:fs');
@@ -34,12 +35,13 @@ async function waitForDb(timeoutMs = 15000) {
   return null;
 }
 
+// Sauvegarde SEULEMENT quand le pairing est confirmé (connection === 'open')
 async function saveAuthState() {
+  const credsPath = path.join(AUTH_DIR, 'creds.json');
+  if (!fs.existsSync(credsPath)) return;
   const db = await waitForDb();
   if (!db) { console.warn('[WHATSAPP] Mongo pas prêt — session non sauvegardée.'); return; }
   try {
-    const credsPath = path.join(AUTH_DIR, 'creds.json');
-    if (!fs.existsSync(credsPath)) return;
     const credsData = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
     await db.collection('auth_state').updateOne(
       { _id: 'whatsapp_session' },
@@ -68,6 +70,24 @@ async function loadAuthState() {
   }
 }
 
+// Supprime session locale + MongoDB (après logged out)
+async function clearAuthState() {
+  // MongoDB
+  const db = getDb();
+  if (db) {
+    try { await db.collection('auth_state').deleteOne({ _id: 'whatsapp_session' }); }
+    catch (_) { /* ignore */ }
+  }
+  // Fichiers locaux
+  try {
+    const credsPath = path.join(AUTH_DIR, 'creds.json');
+    if (fs.existsSync(credsPath)) fs.unlinkSync(credsPath);
+    const preKeysDir = path.join(AUTH_DIR, 'pre-keys');
+    if (fs.existsSync(preKeysDir)) fs.rmSync(preKeysDir, { recursive: true, force: true });
+    console.log('[WHATSAPP] Auth locale nettoyée.');
+  } catch (_) { /* ignore */ }
+}
+
 // ─── Handlers extraits (une seule instance, pas de fuite) ─────────────
 
 function requestPairingIfNeeded() {
@@ -77,7 +97,6 @@ function requestPairingIfNeeded() {
   pairingRequested = true;
   const numero = (process.env.BOT_WHATSAPP_NUMBER || '').replace(/[^\d]/g, '');
   if (numero) {
-    // Délai initial de 4s pour laisser le WebSocket s'établir, puis retry x3
     const tryPairing = (retry = 0) => {
       sock.requestPairingCode(numero)
         .then(code => console.log('[WHATSAPP] Code de pairing : ' + code))
@@ -103,14 +122,14 @@ function handleConnectionUpdate(update) {
 
   if (qr) console.log('[WHATSAPP] QR reçu (scan manuel nécessaire comme fallback).');
 
-  // Dès que le socket tente de se connecter, déclencher le pairing (avec délai interne)
   if (connection === 'connecting') requestPairingIfNeeded();
 
   if (connection === 'open') {
     tentatives = 0;
-    console.log('[WHATSAPP] Connecté.');
+    console.log('[WHATSAPP] Connecté — session valide.');
     sang.emit('canal:connecte', { canal: NOM_CANAL });
-    setTimeout(() => saveAuthState(), 3000);
+    // Sauvegarde immédiate — pairing confirmé, les creds sont valides
+    saveAuthState();
   }
 
   if (connection === 'close') {
@@ -121,12 +140,9 @@ function handleConnectionUpdate(update) {
     sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: lastDisconnect?.error?.message });
 
     if (dejaDeconnecte) {
-      console.error('[WHATSAPP] Session déconnectée (logged out) — re-pairing nécessaire.');
+      console.error('[WHATSAPP] Session invalide (logged out) — nettoyage et re-pairing.');
       pairingRequested = false;
-      (async () => {
-        const db = getDb();
-        if (db) await db.collection('auth_state').deleteOne({ _id: 'whatsapp_session' });
-      })();
+      clearAuthState();
       return;
     }
 
@@ -209,9 +225,9 @@ async function connect() {
       printQRInTerminal: false,
     });
 
+    // Sauvegarde locale uniquement (fichiers), PAS MongoDB
     sock.ev.on('creds.update', async (creds) => {
       await saveCreds(creds);
-      setTimeout(() => saveAuthState(), 5000);
     });
 
     sock.ev.on('connection.update', handleConnectionUpdate);
