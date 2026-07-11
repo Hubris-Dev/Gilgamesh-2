@@ -77,9 +77,20 @@ function requestPairingIfNeeded() {
   pairingRequested = true;
   const numero = (process.env.BOT_WHATSAPP_NUMBER || '').replace(/[^\d]/g, '');
   if (numero) {
-    sock.requestPairingCode(numero)
-      .then(code => console.log('[WHATSAPP] Code de pairing : ' + code))
-      .catch(e => console.error('[WHATSAPP] Échec pairing :', e.message));
+    // Délai initial de 4s pour laisser le WebSocket s'établir, puis retry x3
+    const tryPairing = (retry = 0) => {
+      sock.requestPairingCode(numero)
+        .then(code => console.log('[WHATSAPP] Code de pairing : ' + code))
+        .catch(e => {
+          if (retry < 2) {
+            console.warn('[WHATSAPP] Pairing tentative ' + (retry + 1) + '/3 échouée, retry dans 5s...');
+            setTimeout(() => tryPairing(retry + 1), 5000);
+          } else {
+            console.error('[WHATSAPP] Échec pairing après 3 tentatives :', e.message);
+          }
+        });
+    };
+    setTimeout(() => tryPairing(), 4000);
   } else {
     console.warn('[WHATSAPP] BOT_WHATSAPP_NUMBER absent — QR nécessaire.');
   }
@@ -90,9 +101,9 @@ function handleConnectionUpdate(update) {
   const { DisconnectReason } = require('@whiskeysockets/baileys');
   const { Boom } = require('@hapi/boom');
 
-  if (qr) console.log('[WHATSAPP] QR reçu (scan manuel nécessaire).');
+  if (qr) console.log('[WHATSAPP] QR reçu (scan manuel nécessaire comme fallback).');
 
-  // Dès que le socket tente de se connecter, demander le pairing code
+  // Dès que le socket tente de se connecter, déclencher le pairing (avec délai interne)
   if (connection === 'connecting') requestPairingIfNeeded();
 
   if (connection === 'open') {
@@ -111,7 +122,7 @@ function handleConnectionUpdate(update) {
 
     if (dejaDeconnecte) {
       console.error('[WHATSAPP] Session déconnectée (logged out) — re-pairing nécessaire.');
-      pairingRequested = false; // reset pour re-pairing
+      pairingRequested = false;
       (async () => {
         const db = getDb();
         if (db) await db.collection('auth_state').deleteOne({ _id: 'whatsapp_session' });
