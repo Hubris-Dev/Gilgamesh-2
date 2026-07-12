@@ -6,8 +6,8 @@
 //
 // PERSISTANCE — La session est mirrorée vers MongoDB sur CHAQUE creds.update,
 // pas seulement sur 'open'. Restauration non bloquante au démarrage.
-// Plus de waitForDb(), plus de dépendance MongoDB avant connexion.
-// CacheableSignalKeyStore, timeouts explicites, browser config.
+// CacheableSignalKeyStore, timeouts explicites, browser config validée
+// pour pairing code (voir Baileys issue #328).
 
 const path = require('node:path');
 const fs = require('node:fs');
@@ -23,10 +23,11 @@ let sock = null;
 let tentatives = 0;
 let saveCredsFn = null;
 let pairingRequested = false;
+let isConnecting = false;   // Bloque les connect() concurrents
+let isClearing = false;     // Bloque mirrorToMongo pendant un nettoyage
 
 // ─── Persistance MongoDB (best effort, non bloquant) ───
 
-/** Essaye de restaurer la session depuis MongoDB. Silencieux si Mongo absent. */
 async function restoreFromMongo() {
   const db = getDb();
   if (!db) return false;
@@ -40,8 +41,8 @@ async function restoreFromMongo() {
   } catch (_) { return false; }
 }
 
-/** Mirror la session locale vers MongoDB. Silencieux si Mongo absent. */
 async function mirrorToMongo() {
+  if (isClearing) return; // Ne pas mirror si on est en train de nettoyer
   const db = getDb();
   if (!db) return;
   const credsPath = path.join(AUTH_DIR, 'creds.json');
@@ -56,8 +57,8 @@ async function mirrorToMongo() {
   } catch (_) { /* silencieux */ }
 }
 
-/** Nettoie session locale + MongoDB. */
 async function clearAuthState() {
+  isClearing = true;
   const db = getDb();
   if (db) {
     try { await db.collection('auth_state').deleteOne({ _id: 'whatsapp_session' }); } catch (_) {}
@@ -68,6 +69,7 @@ async function clearAuthState() {
     const preKeysDir = path.join(AUTH_DIR, 'pre-keys');
     if (fs.existsSync(preKeysDir)) fs.rmSync(preKeysDir, { recursive: true, force: true });
   } catch (_) {}
+  isClearing = false;
 }
 
 // ─── Handlers ───
@@ -81,31 +83,33 @@ function requestPairingIfNeeded() {
   if (!numero) { console.warn('[WHATSAPP] BOT_WHATSAPP_NUMBER absent — QR nécessaire.'); return; }
 
   const tryPairing = (retry = 0) => {
+    if (!sock) return;
     sock.requestPairingCode(numero)
       .then(code => {
         console.log('[WHATSAPP] Code de pairing : ' + code);
         sang.emit('canal:pairing', { canal: NOM_CANAL, code });
       })
       .catch(e => {
-        if (retry < 2) {
+        if (retry < 2 && sock) {
           console.warn('[WHATSAPP] Pairing tentative ' + (retry + 1) + '/3 échouée, retry 5s...');
           setTimeout(() => tryPairing(retry + 1), 5000);
         } else {
           console.error('[WHATSAPP] Echec pairing après 3 tentatives :', e.message);
-          pairingRequested = false; // Allow retry on next reconnect
+          pairingRequested = false;
         }
       });
   };
-  // Immédiat — pas de délai, le 'connecting' est le bon moment
   tryPairing();
 }
 
 function handleConnectionUpdate(update) {
   const { connection, lastDisconnect, qr } = update;
 
-  if (qr) console.log('[WHATSAPP] QR reçu (fallback scan manuel).');
-
-  if (connection === 'connecting') requestPairingIfNeeded();
+  // Appel sur QR (comme l'exemple officiel) — le socket est PRÊT à ce moment
+  if (qr) {
+    console.log('[WHATSAPP] QR reçu — socket prêt, demande pairing...');
+    requestPairingIfNeeded();
+  }
 
   if (connection === 'open') {
     tentatives = 0;
@@ -126,8 +130,10 @@ function handleConnectionUpdate(update) {
     if (dejaDeconnecte) {
       console.warn('[WHATSAPP] Session invalide (logged out) — nettoyage + re-pairing.');
       pairingRequested = false;
-      // Attendre le nettoyage MongoDB AVANT de reconnecter
-      clearAuthState().then(() => reconnect());
+      clearAuthState().then(() => {
+        isConnecting = false;
+        reconnect();
+      });
       return;
     }
 
@@ -180,6 +186,13 @@ async function reconnect() {
 }
 
 async function connect() {
+  // Bloque les appels concurrents
+  if (isConnecting) {
+    console.warn('[WHATSAPP] Connexion déjà en cours — ignoré.');
+    return null;
+  }
+  isConnecting = true;
+
   try {
     const {
       default: makeWASocket,
@@ -189,13 +202,13 @@ async function connect() {
     } = require('@whiskeysockets/baileys');
     const pino = require('pino');
 
-    // Restauration MongoDB AVANT la lecture locale — évite les conflits d'état
     await restoreFromMongo();
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     saveCredsFn = saveCreds;
     const { version } = await fetchLatestBaileysVersion();
 
+    // Browser config validée pour pairing code (Baileys issue #328)
     sock = makeWASocket({
       version,
       auth: {
@@ -204,13 +217,12 @@ async function connect() {
       },
       logger: pino({ level: 'silent' }),
       printQRInTerminal: false,
-      browser: ['Ubuntu', 'Chrome', '20.0.04'],
+      browser: ['Chrome (Linux)', '', ''],
       markOnlineOnConnect: true,
       connectTimeoutMs: 120000,
       defaultQueryTimeoutMs: 0,
     });
 
-    // Sauvegarde locale + mirror MongoDB à chaque mise à jour
     sock.ev.on('creds.update', async (creds) => {
       await saveCreds(creds);
       mirrorToMongo().catch(() => {});
@@ -220,10 +232,12 @@ async function connect() {
     sock.ev.on('messages.upsert', handleMessagesUpsert);
 
     setupListeners();
+    isConnecting = false;
     return sock;
   } catch (err) {
     console.error('[WHATSAPP] Echec de connexion :', err.message);
     sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: err.message });
+    isConnecting = false;
     return null;
   }
 }
