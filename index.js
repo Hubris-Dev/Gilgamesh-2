@@ -14,7 +14,7 @@ require('http').createServer((_req, res) => {
   console.log('[HTTP] Port ' + (process.env.PORT || 10000) + ' — Render apaisé.');
 }).
 
-const geneseed = require('./core/geneseed');
+const geneseed = require('./core/geneseed').activateGeneseed;
 
 if (!geneseed.verify()) {
   console.error('[SQUELETTE] Gêne-seed invalide. Arrêt.');
