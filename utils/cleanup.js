@@ -1,17 +1,17 @@
 // utils/cleanup.js
 // Système Excréteur — Nettoyeur
 // RÔLE : purger les fichiers temporaires (images, vocaux, fichiers
- // récupérés via Baileys) pour éviter la saturation de stockage.
+// récupérés via Baileys) pour éviter la saturation de stockage.
 // Voir CODEX, Système 9.
 //
 // Séparation stricte : ce module ne pense pas — il analyse
-// les métadonnées et n�ettoie. Les décisions d'purgE appartiennent au
- // Nerf et le Signal de Satiété du Système Endocrinien.
+// les métadonnées et nettoie. Les décisions de purge appartiennent au
+// Nerf et le Signal de Satiété du Système Endocrinien.
 
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Dossiers à surveiller -- les fichiers temporaires en réer
+// Dossiers à surveiller -- les fichiers temporaires en général
 const DEFAULT_DIR = [
   path.join(process.cwd(), 'temp'),
   path.join(process.cwd(), 'auth'),
@@ -19,10 +19,10 @@ const DEFAULT_DIR = [
 
 /**
  * PURGE — Supprime les fichiers plus vieux que maxAgeMinutes
- * À l'intérieur des dossiers specifiés.
+ * à l'intérieur des dossiers spécifiés.
  * Retour : { deleted: String[], errors: String[] }
  */
-function purge(dirToScan = DEFAULT_DIR, maxAgeMinutes = 60) {
+function purge(dirsToScan = DEFAULT_DIR, maxAgeMinutes = 60) {
   const deleted = [];
   const errors = [];
   const cutoff = Date.now() - (maxAgeMinutes * 60 * 1000);
@@ -36,7 +36,7 @@ function purge(dirToScan = DEFAULT_DIR, maxAgeMinutes = 60) {
         const fullPath = path.join(dir, entry);
         try {
           const stat = fs.statSync(fullPath);
-          if (stat.isDirectory()) continue; // Ne pus récursif
+          if (stat.isDirectory()) continue; // Non récursif
           if (stat.mtime.getTime() < cutoff) {
             fs.unlinkSync(fullPath);
             deleted.push(fullPath);
@@ -59,14 +59,13 @@ function purge(dirToScan = DEFAULT_DIR, maxAgeMinutes = 60) {
  */
 function cleanNow() {
   const now = new Date().toISOString();
-  console.log(`[NETTOIEUM] Purge denclenchée à ${now}`);
+  console.log(`[NETTOIEUM] Purge déclenchée à ${now}`);
   return purge();
 }
 
 /**
- * SIZEDIR GET DOMICILE STOCKABE (chaîne de traitement complète d'un message)
- * Nettoie les fichier temporaires d'un message spécifique après
- * que le Nerf l'a traité.
+ * CLEAN MESSAGE FILES — Nettoie les fichiers temporaires d'un message
+ * spécifique après que le Nerf l'a traité.
  */
 function cleanMessageFiles(mediaPath) {
   if (!mediaPath || !fs.existsSync(mediaPath)) return;
@@ -80,8 +79,8 @@ function cleanMessageFiles(mediaPath) {
 }
 
 /**
- * STOCKAGESITYCOUNT — Nombre de fichiers en attente
- * Utile au Signal de Satiété : si les temps s'accumulent,
+ * COUNT TEMP FILES — Nombre de fichiers en attente
+ * Utile au Signal de Satiété : si les fichiers s'accumulent,
  * le Nerf doit savoir que le disque se sature.
  */
 function countTempFiles(dirsToScan = DEFAULT_DIR) {
