@@ -2,17 +2,20 @@
 // CLIENT IA — Kryven + Groq (Cœur Secondaire)
 // Abstraction pour appeler l'IA
 // Loi 4 : Kryven peut mourir. Groq prend le relais.
-  // EXTENSION : meme si aucun moteur IA n'est disponible,
-  // Gilgamesh ne crash pas. Il continue en mode dégradé.
+// EXTENSION : meme si aucun moteur IA n'est disponible,
+// Gilgamesh ne crash pas. Il continue en mode dégradé.
 
 const axios = require('axios');
 
 const KRYVEN_MODEL = 'kryven-uncensored-v2';
-const GROQ_MODEL = 'mixtral-8x7b-32768';
+// AVANT : 'mixtral-8x7b-32768' — déprécié par Groq depuis le 20/03/2025, ce qui
+// causait un 400 sur CHAQUE appel au Cœur Secondaire. Remplacé par le modèle
+// de production actuellement recommandé par Groq.
+const GROQ_MODEL = 'openai/gpt-oss-120b';
 
 // Réponses statiques pour le mode dégradé
 const FALLBACK_REPLIES = [
-  `Je ne suis pas en état de répondre pour l'instant. Un problème technique mémèche de t'assister. Reviens plus tard.`,
+  `Je ne suis pas en état de répondre pour l'instant. Un problème technique m'empêche de t'assister. Reviens plus tard.`,
   `Groq et Kryven sont hors de ma portée. Je reviendrai quand le circuit sera rétabli.`,
   `Techniquement indisponible. Je te préviendrai quand je serai de nouveau prêt à répondre.`,
 ];
@@ -28,6 +31,18 @@ function getConfig() {
     kryvenBaseUrl: process.env.KRYVEN_BASE_URL || 'https://api.kryven.com/v1',
     groqBaseUrl: 'https://api.groq.com/openai/v1',
   };
+}
+
+/**
+ * Formate une erreur axios pour logger la vraie cause (statut + corps de
+ * réponse de l'API), pas juste le message générique "Request failed with
+ * status code 400".
+ */
+function describeAxiosError(err) {
+  if (err.response) {
+    return `status ${err.response.status} — ${JSON.stringify(err.response.data)}`;
+  }
+  return err.message;
 }
 
 /**
@@ -69,7 +84,7 @@ async function resolveKryvenPulse(prompt, isWonder = false) {
     return response.data.choices[0].message.content;
 
   } catch (err) {
-    console.error('[KRYVEN] Erreur :', err.message);
+    console.error('[KRYVEN] Erreur :', describeAxiosError(err));
     throw err;
   }
 }
@@ -106,14 +121,14 @@ async function resolveGroqPulse(prompt, isWonder = false) {
     );
 
     if (!response.data?.choices?.[0]?.message?.content) {
-      throw new Error('Réponse Grop vide ou malformée');
+      throw new Error('Réponse Groq vide ou malformée');
     }
 
     console.log('[GROQ] Réponse reçue (via Cœur Secondaire).');
     return response.data.choices[0].message.content;
 
   } catch (err) {
-    console.error('[GROQ] Erreur :', err.message);
+    console.error('[GROQ] Erreur :', describeAxiosError(err));
     throw err;
   }
 }
@@ -133,11 +148,12 @@ async function resolvePulse(prompt, isWonder = false) {
       console.error('[PULSE] TOUS les moteurs IA SONT HORS-SITE:', groqErr.message);
       // Auto-quit à Gilgamesh_Scheduler pour nettoyage
       const { sang } = require('./heartbeat');
+      const reponse = FALLBACK_REPLIES[Math.floor(Math.random() * FALLBACK_REPLIES.length)];
       sang.emit('cortex:auto-quit', {
         raison: 'tous moteurs IA Indisponibles',
-        reponse: FALLBACK_REPLIES[Math.floor(Math.random() * FALLBACK_REPLIES.length)],
+        reponse,
       });
-      return FALLBACK_REPLIES[0];
+      return reponse;
     }
   }
 }
@@ -164,11 +180,11 @@ function initializeKryvenClient() {
     console.warn('[KRYVEN-CLIENT] ⚠️ Clé Groq manquante.');
   }
 
-  // Loi 4 : si aucun moteur, survire en mode dégradé
+  // Loi 4 : si aucun moteur, survivre en mode dégradé
   if (!kryvenApiKey && !groqApiKey) {
     console.error('[KRYVEN-CLIENT] ⚠️  MODE DEGRADÉ : Aucun moteur IA disponible!');
     console.error('[KRYVEN-CLIENT] Gilgamesh tourne sans IA - réponses statiques.');
-    // ÉMettre un signal au Sang
+    // Émettre un signal au Sang
     try {
       const { sang } = require('./heartbeat');
       sang.emit('kryven:degrade', { raison: 'AUCUN_MOTEUR' });
@@ -201,7 +217,9 @@ function setSettings(config) {
 }
 
 function getStatus() {
-  const { kryvenApiKey, gropApiKey } = getConfig();
+  // AVANT : "gropApiKey" (faute de frappe) faisait planter cette fonction —
+  // groqApiKey n'existait pas dans ce scope (ReferenceError à chaque appel).
+  const { kryvenApiKey, groqApiKey } = getConfig();
   return {
     kryvenAvailable: !!kryvenApiKey,
     groqAvailable: !!groqApiKey,
