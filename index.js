@@ -23,53 +23,73 @@ if (!geneseed.verify()) {
   process.exit(1);
 }
 
-require('./security/immune').activate();
-require('./memory/mongo').connect();
-
-const { sang, start: startHeartbeat } = require('./core/heartbeat');
-startHeartbeat();
-
-const { initializeKryvenClient } = require('./core/kryven-client');
-initializeKryvenClient();
-
-require('./channels/whatsapp').connect();
-
-// → Thyroide : rythme proactif
+// Requêtes hoistées en haut pour être réutilisables dans boot() ET shutdown()
 const scheduler = require('./core/scheduler');
-scheduler.start();
-scheduler.add('nettoyeur-temp', async () => {
-  const { cleanNow } = require('./utils/cleanup');
-  const r = cleanNow();
-  if (r.deleted.length) console.log('[THYROIDE] Purge :', r.deleted.length, 'fichiers.');
-}, 60 * 60 * 1000);
-scheduler.add('metabolisme-memoire', async () => {
-  sang.emit('nerf:metabolismCheck', {});
-}, 5 * 60 * 1000);
+const memoire = require('./memory/mongo');
+const heartbeatModule = require('./core/heartbeat');
+const whatsapp = require('./channels/whatsapp');
 
-// → Système Musculaire
-require('./muscle').activateMuscle();
+// → Démarrage séquentiel : chaque étape attend que la précédente soit vraiment prête
+async function boot() {
+  require('./security/immune').activate();
 
-// → Système Nerveux (Nerf)
-require('./brain').activateBrain();
+  // Mongo DOIT être connecté avant tout système qui en dépend (heartbeat, brain, muscle...).
+  // Avant : connect() était appelé sans await, donc heartbeat pouvait démarrer avant que Mongo soit prêt.
+  await memoire.connect();
+  console.log('[SQUELETTE] MongoDB connecté.');
 
-console.log('[SQUELETTE] Démarrage OK — tous les systèmes actifs.');
-sang.emit('squelette:pret', { horodatage: new Date().toISOString() });
+  const { sang, start: startHeartbeat } = heartbeatModule;
+  startHeartbeat();
+
+  // Kryven ne doit JAMAIS faire crasher le Squelette — le fallback Groq doit pouvoir prendre le relais.
+  // Avant : une erreur ici (clé manquante, timeout) tuait tout le processus.
+  try {
+    const { initializeKryvenClient } = require('./core/kryven-client');
+    initializeKryvenClient();
+  } catch (e) {
+    console.error('[SQUELETTE] Kryven init échoué — poursuite sur fallback Groq :', e.message);
+  }
+
+  require('./channels/whatsapp').connect();
+
+  // → Thyroide : rythme proactif
+  scheduler.start();
+  scheduler.add('nettoyeur-temp', async () => {
+    const { cleanNow } = require('./utils/cleanup');
+    const r = cleanNow();
+    if (r.deleted.length) console.log('[THYROIDE] Purge :', r.deleted.length, 'fichiers.');
+  }, 60 * 60 * 1000);
+  scheduler.add('metabolisme-memoire', async () => {
+    sang.emit('nerf:metabolismCheck', {});
+  }, 5 * 60 * 1000);
+
+  // → Système Musculaire
+  require('./muscle').activateMuscle();
+
+  // → Système Nerveux (Nerf)
+  require('./brain').activateBrain();
+
+  console.log('[SQUELETTE] Démarrage OK — tous les systèmes actifs.');
+  sang.emit('squelette:pret', { horodatage: new Date().toISOString() });
+}
+
+boot().catch((e) => {
+  console.error('[SQUELETTE] Échec critique au démarrage :', e.message);
+  process.exit(1);
+});
 
 // → Graceful shutdown
 function shutdown(signal) {
   console.log('[SQUELETTE] Signal ' + signal + ' reçu — arrêt propre...');
   scheduler.stop();
-  const heartbeat = require('./core/heartbeat');
-  const memoire = require('./memory/mongo');
-  const whatsapp = require('./channels/whatsapp');
-  
-  heartbeat.stop();
+
+  heartbeatModule.stop();
   if (whatsapp.cleanup) whatsapp.cleanup();
-  
+
   memoire.disconnect()
     .then(() => { console.log('[SQUELETTE] Arrêt propre terminé.'); process.exit(0); })
     .catch(() => { console.log('[SQUELETTE] Arrêt forcé.'); process.exit(0); });
-    
+
   setTimeout(() => { console.error('[SQUELETTE] Timeout — arrêt forcé.'); process.exit(1); }, 10000);
 }
 
