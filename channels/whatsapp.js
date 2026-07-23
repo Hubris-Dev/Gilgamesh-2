@@ -1,4 +1,4 @@
-// channels/whatsapp.js
+// channels/whatsapp.j
 // Système Respiratoire — Canal WhatsApp (Baileys)
 // RÔLE : Worker d'exécution pur (Stateless Node).
 // Reçoit sa session via SESSION_BASE64. Aucune génération de QR/Pairing.
