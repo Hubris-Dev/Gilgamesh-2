@@ -19,8 +19,21 @@ let isConnecting = false;   // Bloque les connect() concurrents
 // ─── Injection de Session Base64 ───
 
 async function ingestBase64Session() {
+  const credsPath = path.join(AUTH_DIR, 'creds.json');
+
+  // BUG CORRIGÉ : avant, cette fonction tournait à CHAQUE connect() — y compris
+  // à chaque reconnexion. Ça réécrivait creds.json avec le SESSION_BASE64 figé
+  // de l'env var, effaçant les clés de session à jour que Baileys venait de
+  // sauvegarder (via saveCreds). Ce rollback désynchronise le chiffrement
+  // Signal et finit par faire révoquer la session par WhatsApp (Bad MAC / 401).
+  // Maintenant : on n'ingère QUE s'il n'existe encore aucune session locale.
+  if (fs.existsSync(credsPath)) {
+    console.log('[WHATSAPP] Session locale déjà présente — SESSION_BASE64 ignoré (évite un rollback).');
+    return;
+  }
+
   const base64Session = process.env.SESSION_BASE64;
-  
+
   if (!base64Session) {
     console.error('[FATAL] Variable d\'environnement SESSION_BASE64 manquante.');
     process.exit(1);
@@ -33,8 +46,8 @@ async function ingestBase64Session() {
   try {
     const credsBuffer = Buffer.from(base64Session, 'base64');
     const parsed = JSON.parse(credsBuffer.toString('utf-8')); // Vérification d'intégrité
-    await fs.promises.writeFile(path.join(AUTH_DIR, 'creds.json'), JSON.stringify(parsed, null, 2));
-    console.log('[WHATSAPP] Clé Base64 ingérée et validée avec succès.');
+    await fs.promises.writeFile(credsPath, JSON.stringify(parsed, null, 2));
+    console.log('[WHATSAPP] Clé Base64 ingérée et validée avec succès (premier démarrage).');
   } catch (err) {
     console.error('[FATAL] Clé SESSION_BASE64 invalide ou corrompue :', err.message);
     process.exit(1);
@@ -55,12 +68,11 @@ function handleConnectionUpdate(update) {
   if (connection === 'close') {
     const { DisconnectReason } = require('@whiskeysockets/baileys');
     const { Boom } = require('@hapi/boom');
-    
-    // Extraction robuste du code d'erreur
+
     const codeErreur = lastDisconnect?.error instanceof Boom
-      ? lastDisconnect.error.output?.statusCode 
+      ? lastDisconnect.error.output?.statusCode
       : lastDisconnect?.error?.output?.statusCode;
-      
+
     const dejaDeconnecte = codeErreur === DisconnectReason.loggedOut;
 
     sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: lastDisconnect?.error?.message });
@@ -70,7 +82,7 @@ function handleConnectionUpdate(update) {
       if (fs.existsSync(AUTH_DIR)) {
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
       }
-      process.exit(1); // Force Render à redémarrer un conteneur propre
+      process.exit(1);
     }
 
     tentatives += 1;
@@ -87,10 +99,10 @@ function handleMessagesUpsert({ messages }) {
   for (const msgBrut of messages) {
     const propre = parseMessageBrute(msgBrut);
     if (!propre || !propre.text) continue;
-    
+
     const remoteJid = msgBrut.key.remoteJid || '';
     const isGroup = remoteJid.endsWith('@g.us');
-    
+
     sang.emit('canal:message:recu', {
       senderId: propre.sender, text: propre.text, canal: NOM_CANAL,
       messageId: propre.messageId, senderName: propre.nomAffiche,
@@ -139,7 +151,7 @@ async function connect() {
     } = require('@whiskeysockets/baileys');
     const pino = require('pino');
 
-    // 1. Injection asynchrone avant l'initialisation de Baileys
+    // 1. Injection UNIQUEMENT si aucune session locale n'existe déjà
     await ingestBase64Session();
 
     // 2. Initialisation
