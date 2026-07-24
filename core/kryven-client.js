@@ -8,9 +8,6 @@
 const axios = require('axios');
 
 const KRYVEN_MODEL = 'kryven-uncensored-v2';
-// AVANT : 'mixtral-8x7b-32768' — déprécié par Groq depuis le 20/03/2025, ce qui
-// causait un 400 sur CHAQUE appel au Cœur Secondaire. Remplacé par le modèle
-// de production actuellement recommandé par Groq.
 const GROQ_MODEL = 'openai/gpt-oss-120b';
 
 // Réponses statiques pour le mode dégradé
@@ -47,8 +44,12 @@ function describeAxiosError(err) {
 
 /**
  * RESOLVEKRYVEN_PULSE — Appel au moteur Kryven
+ * NOTE : Kryven est une API tierce dont on ne connaît pas le support exact
+ * des Structured Outputs (response_format json_schema) — on n'y touche pas
+ * pour ne pas casser un appel qui marche. Le paramètre schema est accepté
+ * mais ignoré ici, utilisé uniquement côté Groq pour l'instant.
  */
-async function resolveKryvenPulse(prompt, isWonder = false) {
+async function resolveKryvenPulse(prompt, isWonder = false, schema = null) {
   const { kryvenApiKey, kryvenBaseUrl } = getConfig();
 
   if (!kryvenApiKey) {
@@ -91,26 +92,45 @@ async function resolveKryvenPulse(prompt, isWonder = false) {
 
 /**
  * RESOLVEGROQ_PULSE — Appel au moteur Groq (Cœur Secondaire)
+ * NOUVEAU : accepte un `schema` optionnel — { name, schema } — pour activer
+ * les Structured Outputs de Groq (response_format: json_schema, strict:
+ * true). Le modèle est alors contraint AU NIVEAU DU TOKEN à produire un JSON
+ * qui respecte exactement ce schéma : plus de champ manquant, plus de JSON
+ * malformé, plus besoin du parsing par regex en filet de secours (même s'il
+ * reste là par prudence).
  */
-async function resolveGroqPulse(prompt, isWonder = false) {
+async function resolveGroqPulse(prompt, isWonder = false, schema = null) {
   const { groqApiKey, groqBaseUrl } = getConfig();
 
   if (!groqApiKey) {
     throw new Error('Groq API key not configured');
   }
 
-  console.log('[GROQ] Cœur Secondaire activé. Envoi du prompt...');
+  console.log('[GROQ] Cœur Secondaire activé. Envoi du prompt...' + (schema ? ' (structured output)' : ''));
 
   try {
+    const body = {
+      model: GROQ_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: isWonder ? 0.9 : 0.7,
+      max_tokens: 2048,
+      top_p: 0.95,
+    };
+
+    if (schema) {
+      body.response_format = {
+        type: 'json_schema',
+        json_schema: {
+          name: schema.name,
+          schema: schema.schema,
+          strict: true,
+        },
+      };
+    }
+
     const response = await axios.post(
       `${groqBaseUrl}/chat/completions`,
-      {
-        model: GROQ_MODEL,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: isWonder ? 0.9 : 0.7,
-        max_tokens: 2048,
-        top_p: 0.95,
-      },
+      body,
       {
         headers: {
           'Authorization': `Bearer ${groqApiKey}`,
@@ -136,17 +156,16 @@ async function resolveGroqPulse(prompt, isWonder = false) {
 /**
  * RESOLVEPULSE — Wrapper : essaie Kryven, puis Groq
  */
-async function resolvePulse(prompt, isWonder = false) {
+async function resolvePulse(prompt, isWonder = false, schema = null) {
   try {
-    return await resolveKryvenPulse(prompt, isWonder);
+    return await resolveKryvenPulse(prompt, isWonder, schema);
   } catch (kryvenErr) {
     console.warn('[PULSE] Kryven indisponible — passage au moteur secondaire.');
 
     try {
-      return await resolveGroqPulse(prompt, isWonder);
+      return await resolveGroqPulse(prompt, isWonder, schema);
     } catch (groqErr) {
       console.error('[PULSE] TOUS les moteurs IA SONT HORS-SITE:', groqErr.message);
-      // Auto-quit à Gilgamesh_Scheduler pour nettoyage
       const { sang } = require('./heartbeat');
       const reponse = FALLBACK_REPLIES[Math.floor(Math.random() * FALLBACK_REPLIES.length)];
       sang.emit('cortex:auto-quit', {
@@ -180,11 +199,9 @@ function initializeKryvenClient() {
     console.warn('[KRYVEN-CLIENT] ⚠️ Clé Groq manquante.');
   }
 
-  // Loi 4 : si aucun moteur, survivre en mode dégradé
   if (!kryvenApiKey && !groqApiKey) {
     console.error('[KRYVEN-CLIENT] ⚠️  MODE DEGRADÉ : Aucun moteur IA disponible!');
     console.error('[KRYVEN-CLIENT] Gilgamesh tourne sans IA - réponses statiques.');
-    // Émettre un signal au Sang
     try {
       const { sang } = require('./heartbeat');
       sang.emit('kryven:degrade', { raison: 'AUCUN_MOTEUR' });
@@ -194,16 +211,10 @@ function initializeKryvenClient() {
   console.log('[KRYVEN-CLIENT] Prêt.');
 }
 
-/**
- * GENERATESTATICREPLY — réponse statique pour le mode dégradé
- */
 function generateStaticReply() {
   return FALLBACK_REPLIES[Math.floor(Math.random() * FALLBACK_REPLIES.length)];
 }
 
-/**
- * ISIADEGRADED — Dit si le mode dégradé est actif
- */
 function isIADegraded() {
   const { kryvenApiKey, groqApiKey } = getConfig();
   return !kryvenApiKey && !groqApiKey;
@@ -217,8 +228,6 @@ function setSettings(config) {
 }
 
 function getStatus() {
-  // AVANT : "gropApiKey" (faute de frappe) faisait planter cette fonction —
-  // groqApiKey n'existait pas dans ce scope (ReferenceError à chaque appel).
   const { kryvenApiKey, groqApiKey } = getConfig();
   return {
     kryvenAvailable: !!kryvenApiKey,
