@@ -6,6 +6,26 @@
 // Charger les variables d'environnement D'ABORD pour que le Gêne-seed puisse être vérifié localement
 require('dotenv').config();
 
+// ─── Filets de sécurité globaux ────────────────────────────────────
+// AVANT : aucune capture d'exception non gérée / rejet de promesse non géré.
+// Une erreur async dans n'importe quel module (Baileys, un sang.on(), le
+// scheduler...) tuait le process Node instantanément — parfois avant même
+// que stdout ait fini de flush sur Render, d'où l'impression de "crash sans
+// logs". Ces deux handlers garantissent qu'on logge TOUJOURS la vraie cause
+// avant que quoi que ce soit ne puisse arrêter le process.
+process.on('unhandledRejection', (reason) => {
+  console.error('[SQUELETTE] Rejet de promesse non géré :', reason && reason.stack ? reason.stack : reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[SQUELETTE] Exception non capturée :', err && err.stack ? err.stack : err);
+  // On ne fait PAS process.exit() ici : après une uncaughtException, Node
+  // est dans un état possiblement instable, mais pour un bot conversationnel
+  // il vaut mieux tenter de continuer et logger que de mourir en silence.
+  // Si des crashs répétés apparaissent malgré ce log, la vraie cause sera
+  // enfin visible dans les logs Render au lieu de disparaître.
+});
+
 // Serveur HTTP Express — empêche Render de tuer le service (port binding) et sert de Keep-Alive
 const express = require('express');
 const app = express();
