@@ -95,10 +95,18 @@ function handleConnectionUpdate(update) {
   }
 }
 
-function handleMessagesUpsert({ messages }) {
+function handleMessagesUpsert({ messages, type }) {
+  console.log(`[WHATSAPP] messages.upsert reçu — type: ${type}, count: ${messages?.length || 0}`);
   for (const msgBrut of messages) {
     const propre = parseMessageBrute(msgBrut);
-    if (!propre || !propre.text) continue;
+    if (!propre) {
+      console.log('[WHATSAPP] Message ignoré — pas de key/message exploitable (fromMe, ou événement protocole non-textuel).');
+      continue;
+    }
+    if (!propre.text) {
+      console.log(`[WHATSAPP] Message ignoré — texte vide (contenu non géré par extraireTexte : sticker, réaction, média sans légende...). De: ${propre.sender}`);
+      continue;
+    }
 
     const remoteJid = msgBrut.key.remoteJid || '';
     const isGroup = remoteJid.endsWith('@g.us');
@@ -116,8 +124,14 @@ async function handleReponsePrete(payload) {
   try {
     const { target, text, isGroup } = payload;
     if (!sock || !target || !text) return;
-    const dest = isGroup ? target : target + '@s.whatsapp.net';
+    // Le JID peut déjà être complet (@s.whatsapp.net, @g.us, ou le format
+    // récent @lid) — ne JAMAIS ajouter @s.whatsapp.net s'il y a déjà un
+    // suffixe, sinon on obtient un JID cassé du type "xxxx@lid@s.whatsapp.net"
+    // que Baileys ne peut pas chiffrer — ça casse la socket au lieu de juste
+    // lever une erreur JS propre.
+    const dest = target.includes('@') ? target : target + '@s.whatsapp.net';
     await sock.sendMessage(dest, { text });
+    console.log(`[WHATSAPP] ✓ Message envoyé à ${dest}`);
   } catch (err) {
     console.error('[WHATSAPP] Erreur envoi :', err.message);
   }
@@ -202,7 +216,7 @@ async function cleanup() {
 async function envoyer(destinataire, texte, isGroup = false) {
   if (!sock) { console.warn('[WHATSAPP] Socket absent — envoi impossible.'); return false; }
   try {
-    const jid = isGroup ? destinataire : destinataire + '@s.whatsapp.net';
+    const jid = destinataire.includes('@') ? destinataire : destinataire + '@s.whatsapp.net';
     await sock.sendMessage(jid, { text: texte });
     return true;
   } catch (err) {
