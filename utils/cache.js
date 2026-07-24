@@ -1,16 +1,20 @@
 // utils/cache.js
 // Système Digestif — Vésicule
-// RÔLE : cache en mémoire vive pour les données consultées ‡à
+// RÔLE : cache en mémoire vive pour les données consultées à
 // chaque message — statut admin, liste de bannis. Évite une
 // lecture MongoDB à chaque message. Voir CODEX, Système 8.
 //
-// Lori 1 : la Vésicule ne pense pas — elle stock, elle restitue.
+// Loi 1 : la Vésicule ne pense pas — elle stocke, elle restitue.
 
 let _cache = new Map();
-const DefaultTTL = 60 * 1000; // 1 minute par défaut
+const DEFAULT_TTL = 60 * 1000; // 1 minute par défaut
+// AVANT : la constante s'appelait "DefaultTTL" mais set()/getOrSet()
+// référençaient "DEFAULT_TTL" — ReferenceError garantie au premier appel
+// sans ttl explicite. Ce module n'était importé nulle part donc le bug
+// était inactif, mais corrigé avant qu'il morde le jour où on le branche.
 
 /**
- * SET — Stocke une valeur avec un TTL_E optionnel
+ * SET — Stocke une valeur avec un TTL optionnel
  */
 function set(clef, valeur, ttl = DEFAULT_TTL) {
   const expires = Date.now() + ttl;
@@ -31,7 +35,7 @@ function get(clef) {
 }
 
 /**
- * DEL ETE — Supprime une entrée
+ * DELETE — Supprime une entrée
  */
 function del(clef) {
   _cache.delete(clef);
@@ -52,8 +56,7 @@ function size() {
 }
 
 /**
- * GETORSET— Réstart l'horloge d'expiration d'une entrée
- * (UTI�E PARS MUSCLE : mute du groupe prolonge son cache)
+ * GETORSET — Retourne la valeur en cache, ou l'obtient via factory() et la stocke
  */
 function getOrSet(clef, factory, ttl = DEFAULT_TTL) {
   const entry = _cache.get(clef);
@@ -67,7 +70,6 @@ function getOrSet(clef, factory, ttl = DEFAULT_TTL) {
 
 /**
  * NOTIFYALIVE — Informe tous les consommateurs d'un changement
- * C'est la Duconnarter, quand elle est reliée au sang.
  */
 function notifyAlive(canal) {
   const { sang } = require('../core/heartbeat');
