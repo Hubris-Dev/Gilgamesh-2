@@ -145,6 +145,13 @@ function setupListeners() {
 }
 
 async function reconnect() {
+  // CRITIQUE : fermer proprement l'ancien socket AVANT d'en recréer un
+  // nouveau. Avant, connect() était rappelé directement par-dessus l'ancien
+  // sock sans jamais le fermer : la connexion WebSocket Baileys sous-jacente
+  // restait ouverte en arrière-plan avec ses propres timers/keepalive,
+  // accumulant les handles à chaque micro-coupure réseau jusqu'à épuiser le
+  // process (c'est un des suspects principaux du crash silencieux).
+  await cleanup();
   await new Promise(r => setTimeout(r, 5000));
   connect();
 }
@@ -208,6 +215,12 @@ async function cleanup() {
   sang.removeAllListeners('reponse:prete');
   if (sock) {
     try { sock.ev.removeAllListeners(); } catch (_) {}
+    // AVANT : on détachait juste les listeners JS, mais la connexion
+    // WebSocket sous-jacente de Baileys n'était jamais fermée — elle restait
+    // ouverte en mémoire (socket TCP + timers keepalive internes) même après
+    // qu'un nouveau sock ait été créé par-dessus. sock.end() la ferme pour
+    // de vrai et laisse le garbage collector récupérer l'ancien objet.
+    try { sock.end(new Error('reconnexion — fermeture du socket précédent')); } catch (_) {}
     sock = null;
   }
   console.log('[WHATSAPP] Nettoyé proprement.');
