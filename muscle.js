@@ -13,7 +13,11 @@ function activateMuscle() {
     sang.on('intention:muscle', async (payload) => {
         const { target, command, args = {}, canal, demandedBy } = payload;
         console.log(`[MUSCLE] Intention reçue: ${command} → ${target}`);
-        const commandesSensibles = ['block', 'unblock', 'kick', 'promote', 'demote', 'leave'];
+        // "creategroup" ajouté : réservée à HUBRIS, comme les autres actions
+        // qui modifient la messagerie elle-même plutôt que juste répondre.
+        // Chaînes ajoutées : rejoindre/quitter sont sensibles (changent ce à quoi
+        // le compte est abonné), voir/parler ne le sont pas.
+        const commandesSensibles = ['block', 'unblock', 'kick', 'promote', 'demote', 'leave', 'creategroup', 'joinchannel', 'leavechannel'];
         if (commandesSensibles.includes(command.toLowerCase()) && !isWonder(demandedBy)) {
             console.warn(`[MUSCLE] Commande "${command}" refusée — ${target} n'est pas HUBRIS.`);
             sang.emit('muscle:failed', { target, command, success: false, error: 'Autorisation refusée : commande réservée à HUBRIS.' });
@@ -44,6 +48,11 @@ async function executeCommand(command, target, args, canal) {
         case 'demote': return await demoteUser(sock, target, args.groupId);
         case 'kick': return await kickUser(sock, target, args.groupId);
         case 'status': return await setStatus(sock, args.text);
+        case 'creategroup': return await createGroup(sock, args.subject, args.participants, target);
+        case 'joinchannel': return await joinChannel(sock, args.inviteCode, args.channelJid);
+        case 'leavechannel': return await leaveChannel(sock, args.channelJid);
+        case 'viewchannel': return await viewChannel(sock, args.inviteCode, args.channelJid);
+        case 'speakchannel': return await speakChannel(sock, args.channelJid, args.text);
         default: throw new Error(`Commande inconnue: ${command}`);
     }
 }
@@ -58,5 +67,58 @@ async function promoteUser(sock, userId, groupId) { await sock.groupParticipants
 async function demoteUser(sock, userId, groupId) { await sock.groupParticipantsUpdate(groupId, [userId], 'demote'); return { action: 'demote', userId, groupId, status: 'demoted' }; }
 async function kickUser(sock, userId, groupId) { await sock.groupParticipantsUpdate(groupId, [userId], 'remove'); return { action: 'kick', userId, groupId, status: 'kicked' }; }
 async function setStatus(sock, statusText) { await sock.updateProfileStatus(statusText); return { action: 'status', text: statusText, status: 'updated' }; }
+
+/**
+ * CREATEGROUP — Crée un groupe WhatsApp et y ajoute des participants.
+ * Si args.participants est vide/absent, ajoute automatiquement le demandeur
+ * (le "target" de l'intention) — matche "crée un groupe et mets moi dedans".
+ * NOTE : Baileys attend des JID au format @s.whatsapp.net pour groupCreate ;
+ * si le demandeur arrive en format @lid, il faudra peut-être le convertir —
+ * à vérifier au premier test réel.
+ */
+async function createGroup(sock, subject, participants, requester) {
+    if (!subject || !subject.trim()) throw new Error('Nom de groupe manquant (args.subject).');
+    const membres = (participants && participants.length) ? participants : [requester];
+    const result = await sock.groupCreate(subject.trim(), membres);
+    return { action: 'creategroup', subject, participants: membres, groupId: result.id, status: 'created' };
+}
+
+/**
+ * Chaînes WhatsApp — API "newsletter" de Baileys.
+ * NOTE : pas de méthode fiable pour promouvoir Gilgamesh admin d'une chaîne
+ * par code — ce rôle se donne manuellement depuis l'app WhatsApp par HUBRIS.
+ * Une fois admin, speakchannel fonctionne normalement.
+ */
+async function resolveChannelJid(sock, inviteCode, channelJid) {
+    if (channelJid) return channelJid;
+    if (!inviteCode) throw new Error('Il faut soit channelJid, soit inviteCode.');
+    const meta = await sock.newsletterMetadata('invite', inviteCode);
+    return meta.id;
+}
+
+async function joinChannel(sock, inviteCode, channelJid) {
+    const jid = await resolveChannelJid(sock, inviteCode, channelJid);
+    await sock.newsletterFollow(jid);
+    return { action: 'joinchannel', channelJid: jid, status: 'followed' };
+}
+
+async function leaveChannel(sock, channelJid) {
+    if (!channelJid) throw new Error('channelJid manquant.');
+    await sock.newsletterUnfollow(channelJid);
+    return { action: 'leavechannel', channelJid, status: 'unfollowed' };
+}
+
+async function viewChannel(sock, inviteCode, channelJid) {
+    const jid = channelJid
+        ? await sock.newsletterMetadata('jid', channelJid)
+        : await sock.newsletterMetadata('invite', inviteCode);
+    return { action: 'viewchannel', metadata: jid };
+}
+
+async function speakChannel(sock, channelJid, text) {
+    if (!channelJid || !text) throw new Error('channelJid et text requis pour parler dans une chaîne.');
+    await sock.sendMessage(channelJid, { text });
+    return { action: 'speakchannel', channelJid, status: 'posted' };
+}
 
 module.exports = { activateMuscle, executeCommand };
