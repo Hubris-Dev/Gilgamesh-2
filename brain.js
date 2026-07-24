@@ -22,6 +22,67 @@ const FALLBACK_IDENTITY = `Tu es Gilgamesh, premier Duc du Codex, Trône de l'Or
 TON INTENTITÉ : tâche de discuter avec l'utilisateur. Tu as été directement connecté. 
  Ton system prompt habituel n'a pas pu être chargé — utilise cette identité minimale en attendant que le problème soit résolu.`;
 
+// ============================================================
+// SCHÉMAS STRICTS — pour les Structured Outputs de Groq.
+// Le modèle est contraint au niveau du token à produire EXACTEMENT cette
+// forme : plus de champ manquant (comme le bug replyContent), plus de JSON
+// cassé. parseJSON() reste en filet de secours pour Kryven (schéma non
+// appliqué là) ou si jamais Groq répond sans structured output.
+// ============================================================
+
+const ANALYSIS_SCHEMA = {
+  name: 'analyse_contextuelle',
+  schema: {
+    type: 'object',
+    properties: {
+      contextAnalysis: { type: 'string' },
+      personLoyalty: { type: 'string', enum: ['ami', 'neutre', 'suspect', 'ennemi', 'Lust', 'Wonder', 'autre'] },
+      emotionalTone: { type: 'string' },
+      priority: { type: 'string', enum: ['immédiat', 'normal', 'peut-attendre', 'ignorer'] },
+      hasCommand: { type: 'boolean' },
+      riskLevel: { type: 'string', enum: ['bas', 'moyen', 'élevé'] },
+    },
+    required: ['contextAnalysis', 'personLoyalty', 'emotionalTone', 'priority', 'hasCommand', 'riskLevel'],
+    additionalProperties: false,
+  },
+};
+
+const DECISION_SCHEMA = {
+  name: 'decision_action',
+  schema: {
+    type: 'object',
+    properties: {
+      actionType: { type: 'string', enum: ['reply', 'ignore', 'execute'] },
+      replyContent: { type: ['string', 'null'] },
+      command: {
+        type: ['string', 'null'],
+        enum: ['block', 'unblock', 'mute', 'unmute', 'promote', 'demote', 'kick', 'leave', 'join', 'status',
+               'creategroup', 'joinchannel', 'leavechannel', 'viewchannel', 'speakchannel', null],
+      },
+      args: {
+        type: 'object',
+        properties: {
+          subject: { type: ['string', 'null'] },
+          participants: { type: ['array', 'null'], items: { type: 'string' } },
+          inviteCode: { type: ['string', 'null'] },
+          channelJid: { type: ['string', 'null'] },
+          text: { type: ['string', 'null'] },
+          groupId: { type: ['string', 'null'] },
+          duration: { type: ['number', 'null'] },
+          code: { type: ['string', 'null'] },
+        },
+        required: ['subject', 'participants', 'inviteCode', 'channelJid', 'text', 'groupId', 'duration', 'code'],
+        additionalProperties: false,
+      },
+      mediaType: { type: ['string', 'null'], enum: ['text', 'voice', 'image', null] },
+      mediaContent: { type: ['string', 'null'] },
+      reasoning: { type: ['string', 'null'] },
+    },
+    required: ['actionType', 'replyContent', 'command', 'args', 'mediaType', 'mediaContent', 'reasoning'],
+    additionalProperties: false,
+  },
+};
+
 function loadIdentity() {
   try {
     if (fs.existsSync(SYSTEM_PROMPT_PATH)) {
@@ -185,8 +246,10 @@ function activateBrain() {
           command: decision.command,
           args: decision.args || {},
           canal,
+          isGroup,
           demandedBy: senderId,
         });
+
       }
 
       // ============================================================
@@ -206,6 +269,67 @@ function activateBrain() {
       });
     }
   });
+
+  // ============================================================
+  // FEEDBACK D'EXÉCUTION — AJOUTÉ : avant, muscle:executed/muscle:failed
+  // n'étaient écoutés nulle part. Résultat : toute commande "execute"
+  // (creategroup, block, joinchannel...) réussissait ou échouait
+  // silencieusement, sans jamais rien répondre à l'utilisateur. Le Nerf
+  // décide QUOI dire (Loi 2) — donc c'est ici que la confirmation se fait.
+  // ============================================================
+  sang.on('muscle:executed', (payload) => {
+    const { target, command, canal, isGroup, result } = payload;
+    sang.emit('reponse:prete', {
+      target,
+      text: buildMuscleConfirmation(command, true, result, null),
+      canal,
+      isGroup,
+    });
+  });
+
+  sang.on('muscle:failed', (payload) => {
+    const { target, command, canal, isGroup, error } = payload;
+    sang.emit('reponse:prete', {
+      target,
+      text: buildMuscleConfirmation(command, false, null, error),
+      canal,
+      isGroup,
+    });
+  });
+}
+
+/**
+ * BUILDMUSCLECONFIRMATION — Phrase courte, en personnage, confirmant ou
+ * expliquant l'échec d'une action exécutée. Statique (pas d'appel IA
+ * supplémentaire) pour rester rapide — un Duc ne pérore pas.
+ */
+function buildMuscleConfirmation(command, success, result, error) {
+  if (!success) {
+    if (error && error.includes('Autorisation refusée')) {
+      return "Tu n'as pas l'autorité pour m'ordonner cela. Seul mon maître le peut.";
+    }
+    return `L'entreprise a échoué. ${error || 'Raison inconnue.'}`;
+  }
+
+  const messages = {
+    creategroup: "C'est fait. Le groupe existe désormais.",
+    joinchannel: "J'ai rejoint la chaîne.",
+    leavechannel: "Je m'en suis retiré.",
+    speakchannel: "C'est dit.",
+    viewchannel: "Voilà ce que j'ai vu.",
+    block: "Banni. Il n'existe plus pour moi.",
+    unblock: "Le ban est levé.",
+    kick: "Écarté.",
+    promote: "Élevé en rang.",
+    demote: "Rétrogradé.",
+    mute: "Silence imposé.",
+    unmute: "Le silence est levé.",
+    leave: "Je suis parti.",
+    join: "J'ai rejoint le groupe.",
+    status: "Statut changé.",
+  };
+
+  return messages[command] || "C'est fait.";
 }
 
 /**
@@ -235,7 +359,7 @@ RÉPONSE EN JSON STRICT (pas de texte avant/après) :
 
   let analysis = null;
   try {
-    const rawAnalysis = await resolvePulse(analysisPrompt, metadata.isWonder);
+    const rawAnalysis = await resolvePulse(analysisPrompt, metadata.isWonder, ANALYSIS_SCHEMA);
     analysis = parseJSON(rawAnalysis);
   } catch (err) {
     console.warn("[DEEP-THINK] Analyse échouée, fallback neutre.", err.message);
@@ -265,7 +389,7 @@ RÉPONSE EN JSON STRICT (pas de texte avant/après) :
 
   let decision = null;
   try {
-    const rawDecision = await resolvePulse(decisionPrompt, metadata.isWonder);
+    const rawDecision = await resolvePulse(decisionPrompt, metadata.isWonder, DECISION_SCHEMA);
     decision = parseJSON(rawDecision);
   } catch (err) {
     console.warn("[DEEP-THINK] Décision échouée, réponse par défaut.", err.message);
@@ -366,14 +490,14 @@ function buildDecisionPrompt(contextualPrompt, analysis, metadata, originalText)
 /**
  * RESOLVEPULSE — Abstraction pour Kryven + Groq (cœur secondaire)
  */
-async function resolvePulse(prompt, isWonder = false) {
+async function resolvePulse(prompt, isWonder = false, schema = null) {
   try {
     console.log("[PULSE] Tentative Kryven...");
-    return await resolveKryvenPulse(prompt, isWonder);
+    return await resolveKryvenPulse(prompt, isWonder, schema);
   } catch (err) {
     console.warn("[PULSE] Kryven échouée, basculement vers Groq (cœur secondaire).");
     try {
-      return await resolveGroqPulse(prompt, isWonder);
+      return await resolveGroqPulse(prompt, isWonder, schema);
     } catch (err2) {
       console.error("[PULSE] ERREUR CRITIQUE : Kryven ET Groq échouées.", err2.message);
       throw new Error('Tous les moteurs IA sont indisponibles.');
