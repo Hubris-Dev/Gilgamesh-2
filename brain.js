@@ -358,7 +358,7 @@ function buildDecisionPrompt(contextualPrompt, analysis, metadata, originalText)
 
   prompt += `\n`;
   prompt += `DÉCIDE EN JSON STRICT (pas de texte avant/après) :\n`;
-  prompt += `{\n    "actionType": "reply|ignore|execute",\n    "replyContent": "(si reply) Ton message de réponse, avec ton et personnalité — CE CHAMP EST OBLIGATOIRE si actionType est reply",\n    "command": "(si execute) Commande à exécuter (block, unblock, mute, unmute, etc)",\n    "args": {"clé": "valeur", ...},\n    "mediaType": "text|voice|image|null",\n    "mediaContent": "(si média) contenu ou chemin",\n    "reasoning": "Pourquoi cette décision?"\n  }`;
+  prompt += `{\n    "actionType": "reply|ignore|execute",\n    "replyContent": "(si reply) Ton message de réponse, avec ton et personnalité — CE CHAMP EST OBLIGATOIRE si actionType est reply",\n    "command": "(si execute) Commande à exécuter (block, unblock, mute, unmute, promote, demote, kick, leave, join, status, creategroup, joinchannel, leavechannel, viewchannel, speakchannel)",\n    "args": {"clé": "valeur", "subject": "(si creategroup) nom du groupe", "participants": "(si creategroup, optionnel) tableau de JID à ajouter — par défaut, le demandeur est ajouté seul", "inviteCode": "(si joinchannel/viewchannel) code d'invitation de la chaîne", "channelJid": "(si leavechannel/viewchannel/speakchannel) JID de la chaîne, format xxxx@newsletter", "text": "(si speakchannel) le message à poster"},\n    "mediaType": "text|voice|image|null",\n    "mediaContent": "(si média) contenu ou chemin",\n    "reasoning": "Pourquoi cette décision?"\n  }`;
 
   return prompt;
 }
