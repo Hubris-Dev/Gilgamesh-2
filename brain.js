@@ -145,7 +145,15 @@ function activateBrain() {
       }
 
       if (decision.actionType === 'reply') {
-        const replyText = decision.replyContent;
+        // GARDE-FOU AJOUTÉ : si l'IA renvoie actionType "reply" avec un JSON
+        // valide mais SANS replyContent (champ oublié par le modèle), le
+        // message disparaissait complètement plus loin dans whatsapp.js
+        // (`if (!text) return;`) — sans une seule ligne de log nulle part.
+        let replyText = decision.replyContent;
+        if (!replyText || typeof replyText !== 'string' || !replyText.trim()) {
+          console.warn('[NERF] decision.replyContent manquant ou vide — réponse de secours utilisée. Décision brute :', JSON.stringify(decision));
+          replyText = "Désolé, j'ai eu un blanc. Tu peux répéter ?";
+        }
 
         try {
           await appendMemory(
@@ -350,7 +358,7 @@ function buildDecisionPrompt(contextualPrompt, analysis, metadata, originalText)
 
   prompt += `\n`;
   prompt += `DÉCIDE EN JSON STRICT (pas de texte avant/après) :\n`;
-  prompt += `{\n    "actionType": "reply|ignore|execute",\n    "replyContent": "(si reply) Ton message de réponse, avec ton et personnalité",\n    "command": "(si execute) Commande à exécuter (block, unblock, mute, unmute, etc)",\n    "args": {"clé": "valeur", ...},\n    "mediaType": "text|voice|image|null",\n    "mediaContent": "(si média) contenu ou chemin",\n    "reasoning": "Pourquoi cette décision?"\n  }`;
+  prompt += `{\n    "actionType": "reply|ignore|execute",\n    "replyContent": "(si reply) Ton message de réponse, avec ton et personnalité — CE CHAMP EST OBLIGATOIRE si actionType est reply",\n    "command": "(si execute) Commande à exécuter (block, unblock, mute, unmute, etc)",\n    "args": {"clé": "valeur", ...},\n    "mediaType": "text|voice|image|null",\n    "mediaContent": "(si média) contenu ou chemin",\n    "reasoning": "Pourquoi cette décision?"\n  }`;
 
   return prompt;
 }
