@@ -1,17 +1,21 @@
 // core/kryven-client.js
-// CLIENT IA — Kryven + Groq (Cœur Secondaire)
+// CLIENT IA — Kryven + Venice AI (Cœur Secondaire)
 // Abstraction pour appeler l'IA
-// Loi 4 : Kryven peut mourir. Groq prend le relais.
+// Loi 4 : Kryven peut mourir. Venice AI prend le relais.
+//
+// Venice AI : API OpenAI-compatible, modèles uncensored (sécurité retirée par
+// design, pas "juste moins censurée"). Parfait pour Gilgamesh — la persona a
+// le contrôle total, pas d'alignement de sécurité qui se met en travers.
 
 const axios = require('axios');
 
 const KRYVEN_MODEL = 'kryven-uncensored-v2';
-const GROQ_MODEL = 'llama-3.1-70b-versatile';  // Moins censuré que gpt-oss
+const VENICE_MODEL = 'venice-uncensored';
 
 // Réponses statiques pour le mode dégradé
 const FALLBACK_REPLIES = [
   `Je ne suis pas en état de répondre pour l'instant. Un problème technique m'empêche de t'assister. Reviens plus tard.`,
-  `Groq et Kryven sont hors de ma portée. Je reviendrai quand le circuit sera rétabli.`,
+  `Venice et Kryven sont hors de ma portée. Je reviendrai quand le circuit sera rétabli.`,
   `Techniquement indisponible. Je te préviendrai quand je serai de nouveau prêt à répondre.`,
 ];
 
@@ -21,9 +25,9 @@ const FALLBACK_REPLIES = [
 function getConfig() {
   return {
     kryvenApiKey: process.env.KRYVEN_API_KEY || '',
-    groqApiKey: process.env.GROQ_API_KEY || '',
+    veniceApiKey: process.env.VENICE_API_KEY || '',
     kryvenBaseUrl: process.env.KRYVEN_BASE_URL || 'https://api.kryven.com/v1',
-    groqBaseUrl: 'https://api.groq.com/openai/v1',
+    veniceBaseUrl: 'https://api.venice.ai/api/v1',
   };
 }
 
@@ -82,21 +86,22 @@ async function resolveKryvenPulse(prompt, isWonder = false, schema = null) {
 }
 
 /**
- * RESOLVEGROQ_PULSE — Appel au moteur Groq (Cœur Secondaire)
- * Modèle : llama-3.1-70b-versatile (moins censuré que gpt-oss-120b)
+ * RESOLEVENIC_PULSE — Appel au moteur Venice AI (Cœur Secondaire)
+ * Venice uncensored : pas de filtres de sécurité, la persona (Gilgamesh) a
+ * le contrôle total. Parfait pour un bot autonome sans refus déguisés.
  */
 async function resolveGroqPulse(prompt, isWonder = false, schema = null) {
-  const { groqApiKey, groqBaseUrl } = getConfig();
+  const { veniceApiKey, veniceBaseUrl } = getConfig();
 
-  if (!groqApiKey) {
-    throw new Error('Groq API key not configured');
+  if (!veniceApiKey) {
+    throw new Error('Venice API key not configured');
   }
 
-  console.log('[GROQ] Cœur Secondaire activé. Envoi du prompt...' + (schema ? ' (structured output)' : ''));
+  console.log('[VENICE] Cœur Secondaire activé. Envoi du prompt...' + (schema ? ' (structured output)' : ''));
 
   try {
     const body = {
-      model: GROQ_MODEL,
+      model: VENICE_MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: isWonder ? 0.9 : 0.7,
       max_tokens: 2048,
@@ -105,21 +110,16 @@ async function resolveGroqPulse(prompt, isWonder = false, schema = null) {
 
     if (schema) {
       body.response_format = {
-        type: 'json_schema',
-        json_schema: {
-          name: schema.name,
-          schema: schema.schema,
-          strict: true,
-        },
+        type: 'json_object',
       };
     }
 
     const response = await axios.post(
-      `${groqBaseUrl}/chat/completions`,
+      `${veniceBaseUrl}/chat/completions`,
       body,
       {
         headers: {
-          'Authorization': `Bearer ${groqApiKey}`,
+          'Authorization': `Bearer ${veniceApiKey}`,
           'Content-Type': 'application/json',
         },
         timeout: 30000,
@@ -127,20 +127,20 @@ async function resolveGroqPulse(prompt, isWonder = false, schema = null) {
     );
 
     if (!response.data?.choices?.[0]?.message?.content) {
-      throw new Error('Réponse Groq vide ou malformée');
+      throw new Error('Réponse Venice vide ou malformée');
     }
 
-    console.log('[GROQ] Réponse reçue (via Cœur Secondaire).');
+    console.log('[VENICE] Réponse reçue (via Cœur Secondaire).');
     return response.data.choices[0].message.content;
 
   } catch (err) {
-    console.error('[GROQ] Erreur :', describeAxiosError(err));
+    console.error('[VENICE] Erreur :', describeAxiosError(err));
     throw err;
   }
 }
 
 /**
- * RESOLVEPULSE — Wrapper : essaie Kryven, puis Groq
+ * RESOLVEPULSE — Wrapper : essaie Kryven, puis Venice AI
  */
 async function resolvePulse(prompt, isWonder = false, schema = null) {
   try {
@@ -150,8 +150,8 @@ async function resolvePulse(prompt, isWonder = false, schema = null) {
 
     try {
       return await resolveGroqPulse(prompt, isWonder, schema);
-    } catch (groqErr) {
-      console.error('[PULSE] TOUS les moteurs IA SONT HORS-SITE:', groqErr.message);
+    } catch (veniceErr) {
+      console.error('[PULSE] TOUS les moteurs IA SONT HORS-SITE:', veniceErr.message);
       const { sang } = require('./heartbeat');
       const reponse = FALLBACK_REPLIES[Math.floor(Math.random() * FALLBACK_REPLIES.length)];
       sang.emit('cortex:auto-quit', {
@@ -169,7 +169,7 @@ async function resolvePulse(prompt, isWonder = false, schema = null) {
 function initializeKryvenClient() {
   console.log('[KRYVEN-CLIENT] Initialisation...');
 
-  const { kryvenApiKey, groqApiKey } = getConfig();
+  const { kryvenApiKey, veniceApiKey } = getConfig();
 
   if (kryvenApiKey) {
     console.log('[KRYVEN-CLIENT] ✓ Clé Kryven détectée.');
@@ -177,13 +177,13 @@ function initializeKryvenClient() {
     console.warn('[KRYVEN-CLIENT] ⚠️ Clé Kryven manquante.');
   }
 
-  if (groqApiKey) {
-    console.log('[KRYVEN-CLIENT] ✓ Clé Groq détectée (Cœur Secondaire).');
+  if (veniceApiKey) {
+    console.log('[KRYVEN-CLIENT] ✓ Clé Venice AI détectée (Cœur Secondaire).');
   } else {
-    console.warn('[KRYVEN-CLIENT] ⚠️ Clé Groq manquante.');
+    console.warn('[KRYVEN-CLIENT] ⚠️ Clé Venice AI manquante.');
   }
 
-  if (!kryvenApiKey && !groqApiKey) {
+  if (!kryvenApiKey && !veniceApiKey) {
     console.error('[KRYVEN-CLIENT] ⚠️  MODE DEGRADÉ : Aucun moteur IA disponible!');
     console.error('[KRYVEN-CLIENT] Gilgamesh tourne sans IA - réponses statiques.');
     try {
@@ -200,24 +200,24 @@ function generateStaticReply() {
 }
 
 function isIADegraded() {
-  const { kryvenApiKey, groqApiKey } = getConfig();
-  return !kryvenApiKey && !groqApiKey;
+  const { kryvenApiKey, veniceApiKey } = getConfig();
+  return !kryvenApiKey && !veniceApiKey;
 }
 
 function setSettings(config) {
   if (config.kryvenApiKey) process.env.KRYVEN_API_KEY = config.kryvenApiKey;
-  if (config.groqApiKey) process.env.GROQ_API_KEY = config.groqApiKey;
+  if (config.veniceApiKey) process.env.VENICE_API_KEY = config.veniceApiKey;
   if (config.kryvenBaseUrl) process.env.KRYVEN_BASE_URL = config.kryvenBaseUrl;
   console.log('[KRYVEN-CLIENT] Paramètres mis à jour.');
 }
 
 function getStatus() {
-  const { kryvenApiKey, groqApiKey } = getConfig();
+  const { kryvenApiKey, veniceApiKey } = getConfig();
   return {
     kryvenAvailable: !!kryvenApiKey,
-    groqAvailable: !!groqApiKey,
+    veniceAvailable: !!veniceApiKey,
     kryvenModel: KRYVEN_MODEL,
-    groqModel: GROQ_MODEL,
+    veniceModel: VENICE_MODEL,
   };
 }
 
