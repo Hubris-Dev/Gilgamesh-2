@@ -98,6 +98,13 @@ function handleConnectionUpdate(update) {
 function handleMessagesUpsert({ messages, type }) {
   console.log(`[WHATSAPP] messages.upsert reçu — type: ${type}, count: ${messages?.length || 0}`);
   for (const msgBrut of messages) {
+    // DEBUG TEMPORAIRE — à retirer une fois le vrai champ JID identifié.
+    // On cherche le vrai JID téléphone caché à côté du pseudo-JID @lid
+    // (Baileys expose parfois ça via key.remoteJidAlt / key.participantAlt).
+    if (msgBrut?.key?.remoteJid?.endsWith('@lid')) {
+      console.log('[DEBUG-LID] key brut complet :', JSON.stringify(msgBrut.key, null, 2));
+    }
+
     const propre = parseMessageBrute(msgBrut);
     if (!propre) {
       console.log('[WHATSAPP] Message ignoré — pas de key/message exploitable (fromMe, ou événement protocole non-textuel).');
@@ -163,6 +170,20 @@ async function connect() {
   }
   isConnecting = true;
 
+  // GARDE-FOU : sans ça, un appel réseau bloqué (typiquement
+  // fetchLatestBaileysVersion(), qui n'a aucun timeout natif) fait rester
+  // isConnecting=true POUR TOUJOURS — plus aucune reconnexion ne peut jamais
+  // se déclencher, silence total, aucun log d'erreur (ce n'est pas un crash,
+  // juste une promesse qui ne se résout jamais). Ce watchdog force un reset
+  // après 45s et relance une tentative si connect() n'a toujours pas fini.
+  const watchdog = setTimeout(() => {
+    if (isConnecting) {
+      console.error('[WHATSAPP] connect() bloqué depuis 45s (probablement fetchLatestBaileysVersion) — reset forcé.');
+      isConnecting = false;
+      reconnect();
+    }
+  }, 45000);
+
   try {
     const {
       default: makeWASocket,
@@ -197,9 +218,11 @@ async function connect() {
     sock.ev.on('messages.upsert', handleMessagesUpsert);
 
     setupListeners();
+    clearTimeout(watchdog);
     isConnecting = false;
     return sock;
   } catch (err) {
+    clearTimeout(watchdog);
     console.error('[WHATSAPP] Echec de connexion :', err.message);
     sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: err.message });
     isConnecting = false;
