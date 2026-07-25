@@ -1,21 +1,18 @@
 // core/kryven-client.js
-// CLIENT IA — Kryven + Venice AI (Cœur Secondaire)
+// CLIENT IA — Kryven + Mistral AI (Cœur Secondaire)
 // Abstraction pour appeler l'IA
-// Loi 4 : Kryven peut mourir. Venice AI prend le relais.
-//
-// Venice AI : API OpenAI-compatible, modèles uncensored (sécurité retirée par
-// design, pas "juste moins censurée"). Parfait pour Gilgamesh — la persona a
-// le contrôle total, pas d'alignement de sécurité qui se met en travers.
+// Loi 4 : Kryven peut mourir. Mistral prend le relais.
 
 const axios = require('axios');
 
 const KRYVEN_MODEL = 'kryven-uncensored-v2';
-const VENICE_MODEL = 'venice-uncensored';
+const MISTRAL_MODEL_PRIMARY = 'mistral-large-latest';
+const MISTRAL_MODEL_FALLBACK = 'mistral-small-latest';
 
 // Réponses statiques pour le mode dégradé
 const FALLBACK_REPLIES = [
   `Je ne suis pas en état de répondre pour l'instant. Un problème technique m'empêche de t'assister. Reviens plus tard.`,
-  `Venice et Kryven sont hors de ma portée. Je reviendrai quand le circuit sera rétabli.`,
+  `Mistral et Kryven sont hors de ma portée. Je reviendrai quand le circuit sera rétabli.`,
   `Techniquement indisponible. Je te préviendrai quand je serai de nouveau prêt à répondre.`,
 ];
 
@@ -25,9 +22,9 @@ const FALLBACK_REPLIES = [
 function getConfig() {
   return {
     kryvenApiKey: process.env.KRYVEN_API_KEY || '',
-    veniceApiKey: process.env.VENICE_API_KEY || '',
+    mistralApiKey: process.env.MISTRAL_API_KEY || '',
     kryvenBaseUrl: process.env.KRYVEN_BASE_URL || 'https://api.kryven.com/v1',
-    veniceBaseUrl: 'https://api.venice.ai/api/v1',
+    mistralBaseUrl: 'https://api.mistral.ai/v1',
   };
 }
 
@@ -86,61 +83,80 @@ async function resolveKryvenPulse(prompt, isWonder = false, schema = null) {
 }
 
 /**
- * RESOLEVENIC_PULSE — Appel au moteur Venice AI (Cœur Secondaire)
- * Venice uncensored : pas de filtres de sécurité, la persona (Gilgamesh) a
- * le contrôle total. Parfait pour un bot autonome sans refus déguisés.
+ * APPELMISTRAL — Appel bas niveau à un modèle donné via Mistral AI.
+ * NOTE : Mistral supporte response_format: {"type": "json_object"} pour
+ * garantir un JSON valide (mode "JSON mode" classique), mais pas encore le
+ * strict json_schema à la OpenAI sur tous les modèles — d'où le filet de
+ * sécurité parseJSON côté brain.js qui reste indispensable.
  */
-async function resolveGroqPulse(prompt, isWonder = false, schema = null) {
-  const { veniceApiKey, veniceBaseUrl } = getConfig();
+async function appelMistral(model, prompt, isWonder, schema) {
+  const { mistralApiKey, mistralBaseUrl } = getConfig();
 
-  if (!veniceApiKey) {
-    throw new Error('Venice API key not configured');
+  if (!mistralApiKey) {
+    throw new Error('Mistral API key not configured');
   }
 
-  console.log('[VENICE] Cœur Secondaire activé. Envoi du prompt...' + (schema ? ' (structured output)' : ''));
+  const body = {
+    model,
+    messages: [{ role: 'user', content: prompt }],
+    temperature: isWonder ? 0.9 : 0.7,
+    max_tokens: 2048,
+    top_p: 0.95,
+  };
+
+  if (schema) {
+    body.response_format = { type: 'json_object' };
+  }
+
+  const response = await axios.post(
+    `${mistralBaseUrl}/chat/completions`,
+    body,
+    {
+      headers: {
+        'Authorization': `Bearer ${mistralApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    }
+  );
+
+  if (!response.data?.choices?.[0]?.message?.content) {
+    throw new Error(`Réponse Mistral (${model}) vide ou malformée`);
+  }
+
+  return response.data.choices[0].message.content;
+}
+
+/**
+ * RESOLVEGROQ_PULSE — Appel au Cœur Secondaire (nom conservé pour ne pas
+ * casser l'import dans brain.js, même si le moteur réel est maintenant
+ * Mistral et non plus Groq).
+ * Essaie Mistral Large en premier, puis Mistral Small si le premier échoue
+ * (rate-limit sur le tier gratuit, timeout, etc.).
+ */
+async function resolveGroqPulse(prompt, isWonder = false, schema = null) {
+  console.log('[MISTRAL] Cœur Secondaire activé — tentative Large...' + (schema ? ' (structured output)' : ''));
 
   try {
-    const body = {
-      model: VENICE_MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: isWonder ? 0.9 : 0.7,
-      max_tokens: 2048,
-      top_p: 0.95,
-    };
-
-    if (schema) {
-      body.response_format = {
-        type: 'json_object',
-      };
-    }
-
-    const response = await axios.post(
-      `${veniceBaseUrl}/chat/completions`,
-      body,
-      {
-        headers: {
-          'Authorization': `Bearer ${veniceApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 30000,
-      }
-    );
-
-    if (!response.data?.choices?.[0]?.message?.content) {
-      throw new Error('Réponse Venice vide ou malformée');
-    }
-
-    console.log('[VENICE] Réponse reçue (via Cœur Secondaire).');
-    return response.data.choices[0].message.content;
-
+    const content = await appelMistral(MISTRAL_MODEL_PRIMARY, prompt, isWonder, schema);
+    console.log('[MISTRAL] Réponse reçue (Large).');
+    return content;
   } catch (err) {
-    console.error('[VENICE] Erreur :', describeAxiosError(err));
+    console.warn('[MISTRAL] Large indisponible :', describeAxiosError(err), '— bascule sur Small.');
+  }
+
+  try {
+    const content = await appelMistral(MISTRAL_MODEL_FALLBACK, prompt, isWonder, schema);
+    console.log('[MISTRAL] Réponse reçue (Small, secours).');
+    return content;
+  } catch (err) {
+    console.error('[MISTRAL] Erreur :', describeAxiosError(err));
     throw err;
   }
 }
 
 /**
- * RESOLVEPULSE — Wrapper : essaie Kryven, puis Venice AI
+ * RESOLVEPULSE — Wrapper : essaie Kryven, puis Mistral
  */
 async function resolvePulse(prompt, isWonder = false, schema = null) {
   try {
@@ -150,8 +166,8 @@ async function resolvePulse(prompt, isWonder = false, schema = null) {
 
     try {
       return await resolveGroqPulse(prompt, isWonder, schema);
-    } catch (veniceErr) {
-      console.error('[PULSE] TOUS les moteurs IA SONT HORS-SITE:', veniceErr.message);
+    } catch (mistralErr) {
+      console.error('[PULSE] TOUS les moteurs IA SONT HORS-SITE:', mistralErr.message);
       const { sang } = require('./heartbeat');
       const reponse = FALLBACK_REPLIES[Math.floor(Math.random() * FALLBACK_REPLIES.length)];
       sang.emit('cortex:auto-quit', {
@@ -169,7 +185,7 @@ async function resolvePulse(prompt, isWonder = false, schema = null) {
 function initializeKryvenClient() {
   console.log('[KRYVEN-CLIENT] Initialisation...');
 
-  const { kryvenApiKey, veniceApiKey } = getConfig();
+  const { kryvenApiKey, mistralApiKey } = getConfig();
 
   if (kryvenApiKey) {
     console.log('[KRYVEN-CLIENT] ✓ Clé Kryven détectée.');
@@ -177,13 +193,13 @@ function initializeKryvenClient() {
     console.warn('[KRYVEN-CLIENT] ⚠️ Clé Kryven manquante.');
   }
 
-  if (veniceApiKey) {
-    console.log('[KRYVEN-CLIENT] ✓ Clé Venice AI détectée (Cœur Secondaire).');
+  if (mistralApiKey) {
+    console.log('[KRYVEN-CLIENT] ✓ Clé Mistral détectée (Cœur Secondaire).');
   } else {
-    console.warn('[KRYVEN-CLIENT] ⚠️ Clé Venice AI manquante.');
+    console.warn('[KRYVEN-CLIENT] ⚠️ Clé Mistral manquante.');
   }
 
-  if (!kryvenApiKey && !veniceApiKey) {
+  if (!kryvenApiKey && !mistralApiKey) {
     console.error('[KRYVEN-CLIENT] ⚠️  MODE DEGRADÉ : Aucun moteur IA disponible!');
     console.error('[KRYVEN-CLIENT] Gilgamesh tourne sans IA - réponses statiques.');
     try {
@@ -200,24 +216,25 @@ function generateStaticReply() {
 }
 
 function isIADegraded() {
-  const { kryvenApiKey, veniceApiKey } = getConfig();
-  return !kryvenApiKey && !veniceApiKey;
+  const { kryvenApiKey, mistralApiKey } = getConfig();
+  return !kryvenApiKey && !mistralApiKey;
 }
 
 function setSettings(config) {
   if (config.kryvenApiKey) process.env.KRYVEN_API_KEY = config.kryvenApiKey;
-  if (config.veniceApiKey) process.env.VENICE_API_KEY = config.veniceApiKey;
+  if (config.mistralApiKey) process.env.MISTRAL_API_KEY = config.mistralApiKey;
   if (config.kryvenBaseUrl) process.env.KRYVEN_BASE_URL = config.kryvenBaseUrl;
   console.log('[KRYVEN-CLIENT] Paramètres mis à jour.');
 }
 
 function getStatus() {
-  const { kryvenApiKey, veniceApiKey } = getConfig();
+  const { kryvenApiKey, mistralApiKey } = getConfig();
   return {
     kryvenAvailable: !!kryvenApiKey,
-    veniceAvailable: !!veniceApiKey,
+    mistralAvailable: !!mistralApiKey,
     kryvenModel: KRYVEN_MODEL,
-    veniceModel: VENICE_MODEL,
+    mistralModelPrimary: MISTRAL_MODEL_PRIMARY,
+    mistralModelFallback: MISTRAL_MODEL_FALLBACK,
   };
 }
 
