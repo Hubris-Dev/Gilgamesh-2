@@ -98,13 +98,6 @@ function handleConnectionUpdate(update) {
 function handleMessagesUpsert({ messages, type }) {
   console.log(`[WHATSAPP] messages.upsert reçu — type: ${type}, count: ${messages?.length || 0}`);
   for (const msgBrut of messages) {
-    // DEBUG TEMPORAIRE — à retirer une fois le vrai champ JID identifié.
-    // On cherche le vrai JID téléphone caché à côté du pseudo-JID @lid
-    // (Baileys expose parfois ça via key.remoteJidAlt / key.participantAlt).
-    if (msgBrut?.key?.remoteJid?.endsWith('@lid')) {
-      console.log('[DEBUG-LID] key brut complet :', JSON.stringify(msgBrut.key, null, 2));
-    }
-
     const propre = parseMessageBrute(msgBrut);
     if (!propre) {
       console.log('[WHATSAPP] Message ignoré — pas de key/message exploitable (fromMe, ou événement protocole non-textuel).');
@@ -127,6 +120,40 @@ function handleMessagesUpsert({ messages, type }) {
   }
 }
 
+/**
+ * RESOUDRE_JID_REEL — Tente de convertir un pseudo-JID @lid en vrai JID
+ * téléphone (@s.whatsapp.net) avant l'envoi.
+ *
+ * CONTEXTE (bug Baileys documenté #1718, #1964) : WhatsApp adresse certains
+ * contacts via un identifiant privé @lid plutôt que le numéro réel. Envoyer
+ * un message DIRECTEMENT à ce pseudo-JID "réussit" côté code (sock.sendMessage
+ * ne lève aucune erreur) mais le message reste bloqué "En attente..." côté
+ * destinataire et n'arrive jamais. Baileys v7.x a introduit un store interne
+ * (sock.signalRepository.lidMapping) fait pour résoudre ce mapping — on
+ * l'utilise ICI s'il est disponible (coût zéro si absent, fallback normal).
+ * Si indisponible, un upgrade vers Baileys v7.x sera nécessaire pour un fix
+ * garanti.
+ */
+async function resoudreJidReel(jid) {
+  if (!jid || !jid.endsWith('@lid')) return jid;
+
+  try {
+    const lidStore = sock?.signalRepository?.lidMapping;
+    if (lidStore?.getPNForLID) {
+      const pn = await lidStore.getPNForLID(jid);
+      if (pn) {
+        console.log(`[WHATSAPP] LID résolu → JID réel : ${jid} → ${pn}`);
+        return pn;
+      }
+    }
+  } catch (err) {
+    console.warn('[WHATSAPP] Résolution LID→PN a échoué :', err.message);
+  }
+
+  console.warn(`[WHATSAPP] ⚠️ Impossible de résoudre le vrai JID pour ${jid} — envoi tenté sur le LID brut (risque de non-livraison connu, voir Baileys issues #1718/#1964). Un upgrade vers Baileys v7.x pourrait être nécessaire.`);
+  return jid;
+}
+
 async function handleReponsePrete(payload) {
   try {
     const { target, text, isGroup } = payload;
@@ -136,7 +163,8 @@ async function handleReponsePrete(payload) {
     // suffixe, sinon on obtient un JID cassé du type "xxxx@lid@s.whatsapp.net"
     // que Baileys ne peut pas chiffrer — ça casse la socket au lieu de juste
     // lever une erreur JS propre.
-    const dest = target.includes('@') ? target : target + '@s.whatsapp.net';
+    const jidResolu = await resoudreJidReel(target);
+    const dest = jidResolu.includes('@') ? jidResolu : jidResolu + '@s.whatsapp.net';
     await sock.sendMessage(dest, { text });
     console.log(`[WHATSAPP] ✓ Message envoyé à ${dest}`);
   } catch (err) {
