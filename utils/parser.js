@@ -17,7 +17,7 @@ function extraireTexte(message = {}) {
   );
 }
 
-function parseMessageBrute(msgBrut) {
+export function parseMessageBrute(msgBrut) {
   if (!msgBrut?.key || !msgBrut?.message) return null;
 
   // Les messages envoyés par Gilgamesh lui-même ne doivent jamais revenir dans le corps.
@@ -35,5 +35,3 @@ function parseMessageBrute(msgBrut) {
     nomAffiche: msgBrut.pushName || null,
   };
 }
-
-module.exports = { parseMessageBrute };
