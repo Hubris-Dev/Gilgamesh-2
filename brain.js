@@ -6,12 +6,17 @@
 //   EXTENSION : le Nerf lui-même ne crash jamais le process.
 //   L'identité chargée avec dégradation gracieuse, pas de crash.
 
-const fs = require('fs');
-const path = require('path');
-const { sang } = require('./core/heartbeat');
-const { resolveKryvenPulse, resolveGroqPulse } = require('./core/kryven-client');
-const { getMemory, appendMemory } = require('./memory/mongo');
-const { isSafeInput } = require('./security/filter');
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { sang } from './core/heartbeat.js';
+import { resolveKryvenPulse, resolveGroqPulse } from './core/kryven-client.js';
+import { getMemory, appendMemory } from './memory/mongo.js';
+import { isSafeInput } from './security/filter.js';
+
+// __dirname n'existe pas en ESM — reconstruit depuis import.meta.url.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Charger l'identité — l'ADN du Nerf (Système Endocrinien)
 const SYSTEM_PROMPT_PATH = path.join(__dirname, 'core', 'system-prompt.txt');
@@ -107,7 +112,7 @@ function loadIdentity() {
  * Écoute les signaux du Sang (message accepté par l'Immunitaire)
  * Applique la pensée (Deep Think), puis émet une intention
  */
-function activateBrain() {
+export function activateBrain() {
   loadIdentity();
   console.log("[NERF] Cortex activé. Synapses en attente...");
 
@@ -525,4 +530,4 @@ function parseJSON(raw) {
   }
 }
 
-module.exports = { activateBrain, activateBrainAsync: activateBrain };
+export const activateBrainAsync = activateBrain;
