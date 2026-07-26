@@ -7,19 +7,13 @@
 //
 // Lori 1 : la Rate responsabilise, elle ne décide pas.
 
+import { sang } from './heartbeat.js';
+
 const MAX_RETRIES = 3;
 const DELAY_MS = [1000, 5000, 15000]; // 1 sec , 5 sec, 15 sec
 
 let _queue = [];
-// État durable : qui écoute les évènements du Sang
-let _sang = null;
-
-function _getSang() {
-  if (!_sang) {
-    try { _sang = require('./heartbeat').sang; } catch (_) { }
-  }
-  return _sang;
-}
+let _processing = false;
 
 /**
  * QUEUE — Ajoute une tâche à la file
@@ -27,7 +21,7 @@ function _getSang() {
  * @param { object } context - contexte du message ({target, text, canal, ...})
  * @param { number } attempt - n° déjà de réessaye
  */
-function queue(fn, context, attempt = 0) {
+export function queue(fn, context, attempt = 0) {
   _queue.push({ fn, context, attempt, added: Date.now() });
   processNext();
 }
@@ -58,8 +52,7 @@ async function processNext() {
     console.log(`[RATE] Tâche réussie — ${task.context?.target || '? '}`);
 
     // Succès : signaler au Sang
-    const sang = _getSang();
-    if (sang) sang.emit('rate:success', { context: task.context });
+    sang.emit('rate:success', { context: task.context });
 
   } catch (err) {
     task.attempt += 1;
@@ -69,8 +62,7 @@ async function processNext() {
     } else {
       console.error(`[RATE] Donné après ${MAX_RETRIES} échecs : ${err.message}`);
       // Signaler la perte définitive
-      const sang = _getSang();
-      if (sang) sang.emit('rate:permanently_failed', {
+      sang.emit('rate:permanently_failed', {
         context: task.context,
         error: err.message,
         attempts: task.attempt,
@@ -88,7 +80,7 @@ async function processNext() {
 /**
  * CLEAR - Vide la file d'attente (après une déconnexion par ex)
  */
-function clear() {
+export function clear() {
   _queue = [];
 }
 
@@ -97,7 +89,7 @@ function clear() {
  * Acceptable par le Respiratoire : si l'envoi natif échoue,
  * la Rate le réessaie automatiquement.
  */
-function retryableWrapper(sendFn) {
+export function retryableWrapper(sendFn) {
   return async (destinataire, texte, canal) => {
     try {
       await sendFn(destinataire, texte);
@@ -114,10 +106,6 @@ function retryableWrapper(sendFn) {
 /**
  * QUEUE_SIZE — Longueur actuelle de la file
  */
-function queueSize() {
+export function queueSize() {
   return _queue.length;
 }
-
-let _processing = false;
-
-module.exports = { queue, clear, retryableWrapper, queueSize };
