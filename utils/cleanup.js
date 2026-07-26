@@ -8,8 +8,8 @@
 // les métadonnées et nettoie. Les décisions de purge appartiennent au
 // Nerf et le Signal de Satiété du Système Endocrinien.
 
-const fs = require('node:fs');
-const path = require('node:path');
+import fs from 'node:fs';
+import path from 'node:path';
 
 // Dossiers à surveiller -- les fichiers temporaires en général
 const DEFAULT_DIR = [
@@ -22,7 +22,7 @@ const DEFAULT_DIR = [
  * à l'intérieur des dossiers spécifiés.
  * Retour : { deleted: String[], errors: String[] }
  */
-function purge(dirsToScan = DEFAULT_DIR, maxAgeMinutes = 60) {
+export function purge(dirsToScan = DEFAULT_DIR, maxAgeMinutes = 60) {
   const deleted = [];
   const errors = [];
   const cutoff = Date.now() - (maxAgeMinutes * 60 * 1000);
@@ -57,7 +57,7 @@ function purge(dirsToScan = DEFAULT_DIR, maxAgeMinutes = 60) {
  * CLEAN NOW — Purge et retourne les fichiers supprimés
  * À appeler depuis le Sang ou après une série d'inactivité.
  */
-function cleanNow() {
+export function cleanNow() {
   const now = new Date().toISOString();
   console.log(`[NETTOIEUM] Purge déclenchée à ${now}`);
   return purge();
@@ -67,7 +67,7 @@ function cleanNow() {
  * CLEAN MESSAGE FILES — Nettoie les fichiers temporaires d'un message
  * spécifique après que le Nerf l'a traité.
  */
-function cleanMessageFiles(mediaPath) {
+export function cleanMessageFiles(mediaPath) {
   if (!mediaPath || !fs.existsSync(mediaPath)) return;
 
   try {
@@ -83,7 +83,7 @@ function cleanMessageFiles(mediaPath) {
  * Utile au Signal de Satiété : si les fichiers s'accumulent,
  * le Nerf doit savoir que le disque se sature.
  */
-function countTempFiles(dirsToScan = DEFAULT_DIR) {
+export function countTempFiles(dirsToScan = DEFAULT_DIR) {
   let total = 0;
   dirsToScan.forEach((dir) => {
     if (!fs.existsSync(dir)) return;
@@ -93,5 +93,3 @@ function countTempFiles(dirsToScan = DEFAULT_DIR) {
   });
   return total;
 }
-
-module.exports = { purge, cleanNow, cleanMessageFiles, countTempFiles };
