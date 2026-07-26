@@ -9,18 +9,12 @@
 // Loi 6 : la Thyroïde influence le rythme — elle ne dicte pas.
 // Programmation du rythme, pas de contrainte décisionnelle.
 
+import { sang } from './heartbeat.js';
+
 // État
 let _tasks = [];
-let _sang = null;
 let _tickInterval = null;
 const TICK_MS = 60 * 1000; // Un tic par minute
-
-function _getSang() {
-  if (!_sang) {
-    try { _sang = require('./heartbeat').sang; } catch (_) { }
-  }
-  return _sang;
-}
 
 /**
  * ADD — Ajoute une tâche programmée
@@ -29,7 +23,7 @@ function _getSang() {
  * @param { number } intervalMs - intervalle en millisecondes
  * @param { object } opts - options {params, runAtOnce, emitEvent}
  */
-function add(name, fn, intervalMs, opts = {}) {
+export function add(name, fn, intervalMs, opts = {}) {
   const task = {
     name,
     fn,
@@ -47,7 +41,7 @@ function add(name, fn, intervalMs, opts = {}) {
 /**
  * REMOVE — Retire une tâche
  */
-function remove(name) {
+export function remove(name) {
   const index = _tasks.findIndex(t => t.name === name);
   if (index !== -1) {
     _tasks.splice(index, 1);
@@ -58,12 +52,11 @@ function remove(name) {
 /**
  * START — Démarre la boucle du rythme + exécute les tâches
  */
-function start() {
+export function start() {
   if (_tickInterval) return;
 
   _tickInterval = setInterval(async () => {
     const now = Date.now();
-    const sang = _getSang();
 
     for (const task of _tasks) {
       if (now - task.lastRun < task.intervalMs) continue;
@@ -73,14 +66,12 @@ function start() {
         task.lastRun = now;
         task.runs += 1;
 
-        if (task.emitEvent && sang) {
+        if (task.emitEvent) {
           sang.emit(task.emitEvent, { name: task.name, runs: task.runs, at: new Date().toISOString() });
         }
       } catch (err) {
         console.warn(`[THYROSSED] Échec tâche "${task.name}" : ${err.message}`);
-        if (sang) {
-          sang.emit('thyros:failed', { name: task.name, error: err.message });
-        }
+        sang.emit('thyros:failed', { name: task.name, error: err.message });
       }
 
       if (task.runAtOnce) {
@@ -95,7 +86,7 @@ function start() {
 /**
  * STOP — Pause la boucle
  */
-function stop() {
+export function stop() {
   if (_tickInterval) {
     clearInterval(_tickInterval);
     _tickInterval = null;
@@ -105,7 +96,7 @@ function stop() {
 /**
  * LIST — Liste les tâches actives
  */
-function list() {
+export function list() {
   return _tasks.map(t => ({
     name: t.name,
     intervalMs: t.intervalMs,
@@ -113,5 +104,3 @@ function list() {
     runs: t.runs,
   }));
 }
-
-module.exports = { add, remove, start, stop, list };
