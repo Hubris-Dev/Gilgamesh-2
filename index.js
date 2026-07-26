@@ -14,7 +14,7 @@ import * as memoire from './memory/mongo.js';
 import * as heartbeatModule from './core/heartbeat.js';
 import * as whatsapp from './channels/whatsapp.js';
 import * as immune from './security/immune.js';
-import activateMuscle from './muscle.js';
+import { activateMuscle } from './muscle.js';
 import { activateBrain } from './brain.js';
 import { cleanNow } from './utils/cleanup.js';
 
