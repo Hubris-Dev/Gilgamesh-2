@@ -3,7 +3,8 @@
 // Abstraction pour appeler l'IA
 // Loi 4 : Kryven peut mourir. Mistral prend le relais.
 
-const axios = require('axios');
+import axios from 'axios';
+import { sang } from './heartbeat.js';
 
 const KRYVEN_MODEL = 'kryven-uncensored-v2';
 const MISTRAL_MODEL_PRIMARY = 'mistral-large-latest';
@@ -41,7 +42,7 @@ function describeAxiosError(err) {
 /**
  * RESOLVEKRYVEN_PULSE — Appel au moteur Kryven
  */
-async function resolveKryvenPulse(prompt, isWonder = false, schema = null) {
+export async function resolveKryvenPulse(prompt, isWonder = false, schema = null) {
   const { kryvenApiKey, kryvenBaseUrl } = getConfig();
 
   if (!kryvenApiKey) {
@@ -134,7 +135,7 @@ async function appelMistral(model, prompt, isWonder, schema) {
  * Essaie Mistral Large en premier, puis Mistral Small si le premier échoue
  * (rate-limit sur le tier gratuit, timeout, etc.).
  */
-async function resolveGroqPulse(prompt, isWonder = false, schema = null) {
+export async function resolveGroqPulse(prompt, isWonder = false, schema = null) {
   console.log('[MISTRAL] Cœur Secondaire activé — tentative Large...' + (schema ? ' (structured output)' : ''));
 
   try {
@@ -158,7 +159,7 @@ async function resolveGroqPulse(prompt, isWonder = false, schema = null) {
 /**
  * RESOLVEPULSE — Wrapper : essaie Kryven, puis Mistral
  */
-async function resolvePulse(prompt, isWonder = false, schema = null) {
+export async function resolvePulse(prompt, isWonder = false, schema = null) {
   try {
     return await resolveKryvenPulse(prompt, isWonder, schema);
   } catch (kryvenErr) {
@@ -168,7 +169,6 @@ async function resolvePulse(prompt, isWonder = false, schema = null) {
       return await resolveGroqPulse(prompt, isWonder, schema);
     } catch (mistralErr) {
       console.error('[PULSE] TOUS les moteurs IA SONT HORS-SITE:', mistralErr.message);
-      const { sang } = require('./heartbeat');
       const reponse = FALLBACK_REPLIES[Math.floor(Math.random() * FALLBACK_REPLIES.length)];
       sang.emit('cortex:auto-quit', {
         raison: 'tous moteurs IA Indisponibles',
@@ -182,7 +182,7 @@ async function resolvePulse(prompt, isWonder = false, schema = null) {
 /**
  * INITIALIZEKRYVENCLIENT — Vérifie les clé API et initialise
  */
-function initializeKryvenClient() {
+export function initializeKryvenClient() {
   console.log('[KRYVEN-CLIENT] Initialisation...');
 
   const { kryvenApiKey, mistralApiKey } = getConfig();
@@ -203,31 +203,30 @@ function initializeKryvenClient() {
     console.error('[KRYVEN-CLIENT] ⚠️  MODE DEGRADÉ : Aucun moteur IA disponible!');
     console.error('[KRYVEN-CLIENT] Gilgamesh tourne sans IA - réponses statiques.');
     try {
-      const { sang } = require('./heartbeat');
       sang.emit('kryven:degrade', { raison: 'AUCUN_MOTEUR' });
-    } catch (_) { /* heartbeat pas encore chargé */ }
+    } catch (_) { /* Sang indisponible */ }
   }
 
   console.log('[KRYVEN-CLIENT] Prêt.');
 }
 
-function generateStaticReply() {
+export function generateStaticReply() {
   return FALLBACK_REPLIES[Math.floor(Math.random() * FALLBACK_REPLIES.length)];
 }
 
-function isIADegraded() {
+export function isIADegraded() {
   const { kryvenApiKey, mistralApiKey } = getConfig();
   return !kryvenApiKey && !mistralApiKey;
 }
 
-function setSettings(config) {
+export function setSettings(config) {
   if (config.kryvenApiKey) process.env.KRYVEN_API_KEY = config.kryvenApiKey;
   if (config.mistralApiKey) process.env.MISTRAL_API_KEY = config.mistralApiKey;
   if (config.kryvenBaseUrl) process.env.KRYVEN_BASE_URL = config.kryvenBaseUrl;
   console.log('[KRYVEN-CLIENT] Paramètres mis à jour.');
 }
 
-function getStatus() {
+export function getStatus() {
   const { kryvenApiKey, mistralApiKey } = getConfig();
   return {
     kryvenAvailable: !!kryvenApiKey,
@@ -237,14 +236,3 @@ function getStatus() {
     mistralModelFallback: MISTRAL_MODEL_FALLBACK,
   };
 }
-
-module.exports = {
-  resolveKryvenPulse,
-  resolveGroqPulse,
-  resolvePulse,
-  initializeKryvenClient,
-  generateStaticReply,
-  setSettings,
-  getStatus,
-  isIADegraded,
-};
