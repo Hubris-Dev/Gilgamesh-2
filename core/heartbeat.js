@@ -14,7 +14,7 @@
 // CORRECTION : remplace l'ancien core/sang.js. Le Sang n'est pas un système
 // à part — il vit ici.
 
-const EventEmitter = require('node:events');
+import EventEmitter from 'node:events';
 
 // ─── LE SANG ──────────────────────────────────────────────────────
 class Sang extends EventEmitter {
@@ -38,7 +38,7 @@ class Sang extends EventEmitter {
   }
 }
 
-const sang = new Sang();
+export const sang = new Sang();
 
 // ─── LE POULS ─────────────────────────────────────────────────────
 const INTERVALLE_MS = Number(process.env.POULS_INTERVALLE_MS) || 30000;
@@ -56,7 +56,7 @@ sang.on('canal:deconnecte', ({ canal, raison } = {}) => {
 
 let intervalle = null;
 
-function start() {
+export function start() {
   if (intervalle) return;
 
   intervalle = setInterval(() => {
@@ -71,11 +71,9 @@ function start() {
   console.log(`[POULS] Actif — battement toutes les ${INTERVALLE_MS / 1000}s.`);
 }
 
-function stop() {
+export function stop() {
   if (intervalle) {
     clearInterval(intervalle);
     intervalle = null;
   }
 }
-
-module.exports = { sang, start, stop };
