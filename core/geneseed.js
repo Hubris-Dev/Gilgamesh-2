@@ -7,11 +7,11 @@
 
 // Loi 4 : seul crash volontaire autorisé dans tout le corps.
 
-const fs = require('node:fs');
-const path = require('node:path');
-const crypto = require('node:crypto');
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 
-function verify() {
+export function verify() {
   const seedPath = path.join(process.cwd(), '.geneseed');
   const refHash = process.env.GENESEED_HASH;
 
@@ -28,7 +28,7 @@ function verify() {
   const rawContent = fs.readFileSync(seedPath, 'utf-8');
   // Nettoyer les whitespace pour éviter les problèmes de saut de ligne
   // entre Windows/Mac/Linux/Render. La signification du contenu
-  // n'est pas altérée par les caractres de contrôle.
+  // n'est pas altérée par les caractres de contrôle.
   const cleanedContent = rawContent.replace(/[\r\n\s]/g, '');
   const computedHash = crypto.createHash('sha256').update(cleanedContent).digest('hex');
 
@@ -40,5 +40,3 @@ function verify() {
   console.log('[GÊNE-SEED] ✓ Identité confirmée. Squelette autorisé à se lever.');
   return true;
 }
-
-module.exports = { verify };
