@@ -9,8 +9,8 @@
 // Loi 4 : seul le gène-seed a le droit de crasher le process. Un Mongo injoignable
 // n'arrête PAS Gilgamesh — il tourne en mode dégradé (sans mémoire) et le signale.
 
-const { MongoClient } = require('mongodb');
-const { sang } = require('../core/heartbeat');
+import { MongoClient } from 'mongodb';
+import { sang } from '../core/heartbeat.js';
 
 const TTL_JOURS = parseInt(process.env.MEMOIRE_TTL_JOURS, 10) || 30;
 const SATIET_THRESHOLD = 0.75; // 75% du stockage = alerte
@@ -22,7 +22,7 @@ let client = null;
 let db = null;
 let _satietyDroit = false;
 
-async function connect() {
+export async function connect() {
     const uri = process.env.MONGODB_URI;
 
     if (!uri) {
@@ -62,11 +62,11 @@ async function connect() {
 }
 
 // Retourne db sans log (pour les polleurs comme waitForDb)
-function getDb() {
+export function getDb() {
     return db;
 }
 
-async function disconnect() {
+export async function disconnect() {
     if (client) {
         await client.close();
         client = null;
@@ -75,7 +75,7 @@ async function disconnect() {
     }
 }
 
-async function getMemory(senderId, groupId = null, limit = 20) {
+export async function getMemory(senderId, groupId = null, limit = 20) {
     if (!db) { return []; }
     try {
         const collection = db.collection('conversations');
@@ -91,7 +91,7 @@ async function getMemory(senderId, groupId = null, limit = 20) {
     }
 }
 
-async function appendMemory(senderId, groupId = null, role, content) {
+export async function appendMemory(senderId, groupId = null, role, content) {
     if (!db) { return false; }
     try {
         const collection = db.collection('conversations');
@@ -107,7 +107,7 @@ async function appendMemory(senderId, groupId = null, role, content) {
  * CHECKSATIETY — Vérifie le niveau de stockage et émet un signal
  * si la mémoire approche des limites. Signal de Satiété (Codex S4).
  */
-async function checkSatiety(data = {}) {
+export async function checkSatiety(data = {}) {
     if (!db) return;
 
     try {
@@ -136,8 +136,6 @@ async function checkSatiety(data = {}) {
  * GETSATIETY — Dit si la mémoire est en mode satiété
  * Utilisé par le Nerf pour ajuster ses choix de historique.
  */
-function getSatietyDroit() {
+export function getSatietyDroit() {
     return _satietyDroit;
 }
-
-module.exports = { connect, getDb, disconnect, getMemory, appendMemory, checkSatiety, getSatietyDroit };
