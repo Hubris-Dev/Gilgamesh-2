@@ -3,10 +3,18 @@
 // RÔLE : Worker d'exécution pur (Stateless Node).
 // Reçoit sa session via SESSION_BASE64. Aucune génération de QR/Pairing.
 
-const path = require('node:path');
-const fs = require('node:fs');
-const { sang } = require('../core/heartbeat');
-const { parseMessageBrute } = require('../utils/parser');
+import path from 'node:path';
+import fs from 'node:fs';
+import pino from 'pino';
+import { Boom } from '@hapi/boom';
+import makeWASocket, {
+  useMultiFileAuthState,
+  makeCacheableSignalKeyStore,
+  fetchLatestBaileysVersion,
+  DisconnectReason,
+} from '@whiskeysockets/baileys';
+import { sang } from '../core/heartbeat.js';
+import { parseMessageBrute } from '../utils/parser.js';
 
 const NOM_CANAL = 'whatsapp';
 const MAX_TENTATIVES_RECONNEXION = 10;
@@ -27,6 +35,12 @@ async function ingestBase64Session() {
   // sauvegarder (via saveCreds). Ce rollback désynchronise le chiffrement
   // Signal et finit par faire révoquer la session par WhatsApp (Bad MAC / 401).
   // Maintenant : on n'ingère QUE s'il n'existe encore aucune session locale.
+  //
+  // IMPORTANT (upgrade v7) : une session/creds.json générée sous Baileys 6.x
+  // ne contient pas les clés lid-mapping / device-list / tctoken que
+  // useMultiFileAuthState() v7 attend. Après cet upgrade, régénère un
+  // SESSION_BASE64 frais via un ré-appairage (Termux) plutôt que de réutiliser
+  // l'ancien — sinon la session risque d'être rejetée ou incomplète au démarrage.
   if (fs.existsSync(credsPath)) {
     console.log('[WHATSAPP] Session locale déjà présente — SESSION_BASE64 ignoré (évite un rollback).');
     return;
@@ -66,9 +80,6 @@ function handleConnectionUpdate(update) {
   }
 
   if (connection === 'close') {
-    const { DisconnectReason } = require('@whiskeysockets/baileys');
-    const { Boom } = require('@hapi/boom');
-
     const codeErreur = lastDisconnect?.error instanceof Boom
       ? lastDisconnect.error.output?.statusCode
       : lastDisconnect?.error?.output?.statusCode;
@@ -121,18 +132,26 @@ function handleMessagesUpsert({ messages, type }) {
 }
 
 /**
- * RESOUDRE_JID_REEL — Tente de convertir un pseudo-JID @lid en vrai JID
- * téléphone (@s.whatsapp.net) avant l'envoi.
+ * RESOUDRE_JID_REEL — Convertit un pseudo-JID @lid en vrai JID téléphone
+ * (@s.whatsapp.net) avant l'envoi.
  *
- * CONTEXTE (bug Baileys documenté #1718, #1964) : WhatsApp adresse certains
- * contacts via un identifiant privé @lid plutôt que le numéro réel. Envoyer
- * un message DIRECTEMENT à ce pseudo-JID "réussit" côté code (sock.sendMessage
- * ne lève aucune erreur) mais le message reste bloqué "En attente..." côté
- * destinataire et n'arrive jamais. Baileys v7.x a introduit un store interne
- * (sock.signalRepository.lidMapping) fait pour résoudre ce mapping — on
- * l'utilise ICI s'il est disponible (coût zéro si absent, fallback normal).
- * Si indisponible, un upgrade vers Baileys v7.x sera nécessaire pour un fix
- * garanti.
+ * CONTEXTE (bug Baileys documenté #1718, #1964, résolu par la lib en v7) :
+ * WhatsApp adresse certains contacts via un identifiant privé @lid plutôt
+ * que le numéro réel. Envoyer un message DIRECTEMENT à ce pseudo-JID
+ * "réussit" côté code (sock.sendMessage ne lève aucune erreur) mais le
+ * message reste bloqué "En attente..." côté destinataire et n'arrive jamais.
+ *
+ * Baileys v7 (>= rc.1) expose enfin le store interne pour ce mapping :
+ * sock.signalRepository.lidMapping, avec getPNForLID / getLIDForPN /
+ * storeLIDPNMapping(s) / getLIDsForPNs (voir guide de migration officiel,
+ * https://baileys.wiki/docs/migration/to-v7.0.0/). C'est la méthode utilisée
+ * ci-dessous.
+ *
+ * LIMITE CONNUE (issue #2133) : getPNForLID peut renvoyer null si le mapping
+ * n'a pas encore été appris par le client (le contact n'a pas encore envoyé
+ * de message "normal" observé par cette session) — dans ce cas on retombe
+ * sur le LID brut, au même risque de non-livraison qu'avant. Pas de solution
+ * garantie à 100% côté client documentée à ce jour pour ce cas précis.
  */
 async function resoudreJidReel(jid) {
   if (!jid || !jid.endsWith('@lid')) return jid;
@@ -150,7 +169,7 @@ async function resoudreJidReel(jid) {
     console.warn('[WHATSAPP] Résolution LID→PN a échoué :', err.message);
   }
 
-  console.warn(`[WHATSAPP] ⚠️ Impossible de résoudre le vrai JID pour ${jid} — envoi tenté sur le LID brut (risque de non-livraison connu, voir Baileys issues #1718/#1964). Un upgrade vers Baileys v7.x pourrait être nécessaire.`);
+  console.warn(`[WHATSAPP] ⚠️ Impossible de résoudre le vrai JID pour ${jid} — envoi tenté sur le LID brut (mapping pas encore appris par cette session, voir issue Baileys #2133).`);
   return jid;
 }
 
@@ -213,14 +232,6 @@ async function connect() {
   }, 45000);
 
   try {
-    const {
-      default: makeWASocket,
-      useMultiFileAuthState,
-      makeCacheableSignalKeyStore,
-      fetchLatestBaileysVersion,
-    } = require('@whiskeysockets/baileys');
-    const pino = require('pino');
-
     // 1. Injection UNIQUEMENT si aucune session locale n'existe déjà
     await ingestBase64Session();
 
@@ -289,4 +300,4 @@ async function envoyer(destinataire, texte, isGroup = false) {
   }
 }
 
-module.exports = { connect, reconnect, getSocket, cleanup, envoyer };
+export { connect, reconnect, getSocket, cleanup, envoyer };
