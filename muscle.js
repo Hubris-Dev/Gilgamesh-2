@@ -7,6 +7,7 @@
 const { sang } = require('./core/heartbeat');
 const { getSocket } = require('./channels/whatsapp');
 const { isWonder } = require('./security/recognition');
+export { activateMuscle, executeCommand};
 
 function activateMuscle() {
     console.log('[MUSCLE] Fibres activées. En attente d intentions...');
