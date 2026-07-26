@@ -8,11 +8,11 @@
 //   Émet   : 'immunitaire:accepte'  { senderId, text (nettoyé), canal, isWonder, senderName, messageId, isGroup, groupId, mediaType, mediaPath }
 //            'immunitaire:bloque'   { senderId, raison, canal }
 
-const { sang } = require('../core/heartbeat');
-const recognition = require('./recognition');   // ← recognition.js déplacé dans security/
-const filter = require('./filter');
+import { sang } from '../core/heartbeat.js';
+import * as recognition from './recognition.js';
+import * as filter from './filter.js';
 
-function activate() {
+export function activate() {
   sang.on('canal:message:recu', (payload = {}) => {
     const { senderId, text, canal, senderName, messageId, isGroup, groupId, mediaType, mediaPath } = payload;
 
@@ -39,5 +39,3 @@ function activate() {
 
   console.log('[IMMUNITAIRE] Actif — en écoute sur le Sang.');
 }
-
-module.exports = { activate };
