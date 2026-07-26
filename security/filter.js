@@ -4,7 +4,7 @@
 // Ne pense pas, applique des règles sanitaires strictes, détruit
 // silencieusement le toxique. Voir CODEX, Système 6.
 
-const LONGUEUR_MAX = 4000;
+export const LONGUEUR_MAX = 4000;
 
 // Caractères invisibles / de contrôle — dissimulation de contenu, corruption de stockage.
 const CARACTERES_INVISIBLES = /[\u200B-\u200D\uFEFF\u0000-\u0008\u000B\u000C\u000E-\u001F]/g;
@@ -13,11 +13,11 @@ const CARACTERES_INVISIBLES = /[\u200B-\u200D\uFEFF\u0000-\u0008\u000B\u000C\u00
 // La vraie protection reste les requêtes paramétrées dans memory/mongo.js.
 const MOTIF_INJECTION = /^\s*\$|"\$where"\s*:|"\$ne"\s*:|"\$gt"\s*:/;
 
-function sanitize(text) {
+export function sanitize(text) {
   return text.replace(CARACTERES_INVISIBLES, '').trim();
 }
 
-function isSafeInput(text) {
+export function isSafeInput(text) {
   if (typeof text !== 'string' || text.trim().length === 0) {
     return { safe: false, raison: 'message vide' };
   }
@@ -36,5 +36,3 @@ function isSafeInput(text) {
 
   return { safe: true, raison: null, nettoye };
 }
-
-module.exports = { isSafeInput, sanitize, LONGUEUR_MAX };
