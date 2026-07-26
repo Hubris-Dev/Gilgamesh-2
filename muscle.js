@@ -4,12 +4,11 @@
 // Loi 1 : Le Muscle reçoit des intentions via le Sang, jamais appels directs
 // Loi 2 : Séparation stricte : Nerf décide QUOI, Muscle exécute COMMENT
 
-const { sang } = require('./core/heartbeat');
-const { getSocket } = require('./channels/whatsapp');
-const { isWonder } = require('./security/recognition');
-export { activateMuscle, executeCommand};
+import { sang } from './core/heartbeat.js';
+import { getSocket } from './channels/whatsapp.js';
+import { isWonder } from './security/recognition.js';
 
-function activateMuscle() {
+export function activateMuscle() {
     console.log('[MUSCLE] Fibres activées. En attente d intentions...');
     sang.on('intention:muscle', async (payload) => {
         const { target, command, args = {}, canal, isGroup, demandedBy } = payload;
@@ -35,7 +34,7 @@ function activateMuscle() {
     });
 }
 
-async function executeCommand(command, target, args, canal) {
+export async function executeCommand(command, target, args, canal) {
     const sock = getSocket();
     if (!sock) throw new Error('Client WhatsApp non disponible (canal non initialisé).');
     switch (command.toLowerCase()) {
@@ -121,5 +120,3 @@ async function speakChannel(sock, channelJid, text) {
     await sock.sendMessage(channelJid, { text });
     return { action: 'speakchannel', channelJid, status: 'posted' };
 }
-
-module.exports = { activateMuscle, executeCommand };
