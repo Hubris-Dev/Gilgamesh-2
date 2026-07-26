@@ -6,6 +6,8 @@
 //
 // Loi 1 : la Vésicule ne pense pas — elle stocke, elle restitue.
 
+import { sang } from '../core/heartbeat.js';
+
 let _cache = new Map();
 const DEFAULT_TTL = 60 * 1000; // 1 minute par défaut
 // AVANT : la constante s'appelait "DefaultTTL" mais set()/getOrSet()
@@ -16,7 +18,7 @@ const DEFAULT_TTL = 60 * 1000; // 1 minute par défaut
 /**
  * SET — Stocke une valeur avec un TTL optionnel
  */
-function set(clef, valeur, ttl = DEFAULT_TTL) {
+export function set(clef, valeur, ttl = DEFAULT_TTL) {
   const expires = Date.now() + ttl;
   _cache.set(clef, { valeur, expires });
 }
@@ -24,7 +26,7 @@ function set(clef, valeur, ttl = DEFAULT_TTL) {
 /**
  * GET — Récupère une valeur si elle existe et n'a pas expiré
  */
-function get(clef) {
+export function get(clef) {
   const entry = _cache.get(clef);
   if (!entry) return undefined;
   if (Date.now() > entry.expires) {
@@ -37,28 +39,28 @@ function get(clef) {
 /**
  * DELETE — Supprime une entrée
  */
-function del(clef) {
+export function del(clef) {
   _cache.delete(clef);
 }
 
 /**
  * FLUSH — Vide tout le cache
  */
-function flush() {
+export function flush() {
   _cache.clear();
 }
 
 /**
  * SIZE — Nombre d'entrées en cache
  */
-function size() {
+export function size() {
   return _cache.size;
 }
 
 /**
  * GETORSET — Retourne la valeur en cache, ou l'obtient via factory() et la stocke
  */
-function getOrSet(clef, factory, ttl = DEFAULT_TTL) {
+export function getOrSet(clef, factory, ttl = DEFAULT_TTL) {
   const entry = _cache.get(clef);
   if (entry && Date.now() <= entry.expires) {
     return entry.valeur;
@@ -71,9 +73,6 @@ function getOrSet(clef, factory, ttl = DEFAULT_TTL) {
 /**
  * NOTIFYALIVE — Informe tous les consommateurs d'un changement
  */
-function notifyAlive(canal) {
-  const { sang } = require('../core/heartbeat');
+export function notifyAlive(canal) {
   sang.emit('cache:invalid', { canal });
 }
-
-module.exports = { set, get, del, flush, size, getOrSet, notifyAlive };
