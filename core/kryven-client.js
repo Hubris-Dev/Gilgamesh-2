@@ -41,6 +41,12 @@ function describeAxiosError(err) {
 
 /**
  * RESOLVEKRYVEN_PULSE — Appel au moteur Kryven
+ * NOTE : `schema` est accepté (même signature que resolveGroqPulse) mais
+ * PAS transmis à Kryven ici — son contrat exact de structured output n'est
+ * pas documenté pour nous. Tant que Kryven reste schema-blind, le filet
+ * parseJSON() de brain.js reste le seul garde-fou pour ce moteur. Si Kryven
+ * s'avère OpenAI-compatible sur ce point, même correctif que Mistral
+ * ci-dessous à appliquer ici — à vérifier avant de l'assumer.
  */
 export async function resolveKryvenPulse(prompt, isWonder = false, schema = null) {
   const { kryvenApiKey, kryvenBaseUrl } = getConfig();
@@ -85,10 +91,24 @@ export async function resolveKryvenPulse(prompt, isWonder = false, schema = null
 
 /**
  * APPELMISTRAL — Appel bas niveau à un modèle donné via Mistral AI.
- * NOTE : Mistral supporte response_format: {"type": "json_object"} pour
- * garantir un JSON valide (mode "JSON mode" classique), mais pas encore le
- * strict json_schema à la OpenAI sur tous les modèles — d'où le filet de
- * sécurité parseJSON côté brain.js qui reste indispensable.
+ *
+ * CORRIGÉ : avant, un `schema` fourni ne servait qu'à activer
+ * response_format: {"type": "json_object"} — le mode JSON "libre" de
+ * Mistral, qui garantit un JSON syntaxiquement valide mais PAS la
+ * conformité au schema. Le schema lui-même (ANALYSIS_SCHEMA/DECISION_SCHEMA
+ * de brain.js) n'était jamais transmis à l'API — Mistral ne voyait le
+ * format attendu que dans le texte du prompt, qu'il est libre d'ignorer.
+ * C'est ce qui a produit un `contextAnalysis` renvoyé en objet imbriqué au
+ * lieu d'une string, et un `personLoyalty` en phrase libre au lieu d'une
+ * valeur de l'enum (voir logs prod du 26/07).
+ *
+ * Mistral supporte le Custom Structured Output officiel depuis peu :
+ * response_format: {"type": "json_schema", "json_schema": {name, schema,
+ * strict: true}} — même principe que le strict mode OpenAI, contrainte au
+ * niveau du décodage, pas juste une suggestion de prompt.
+ * (https://docs.mistral.ai/capabilities/structured-output/custom_structured_output/)
+ * Les schemas de brain.js sont déjà au bon format ({name, schema}) — il ne
+ * manquait que ce transport.
  */
 async function appelMistral(model, prompt, isWonder, schema) {
   const { mistralApiKey, mistralBaseUrl } = getConfig();
@@ -106,7 +126,14 @@ async function appelMistral(model, prompt, isWonder, schema) {
   };
 
   if (schema) {
-    body.response_format = { type: 'json_object' };
+    body.response_format = {
+      type: 'json_schema',
+      json_schema: {
+        name: schema.name,
+        schema: schema.schema,
+        strict: true,
+      },
+    };
   }
 
   const response = await axios.post(
