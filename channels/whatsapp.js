@@ -152,6 +152,12 @@ function handleMessagesUpsert({ messages, type }) {
  * de message "normal" observé par cette session) — dans ce cas on retombe
  * sur le LID brut, au même risque de non-livraison qu'avant. Pas de solution
  * garantie à 100% côté client documentée à ce jour pour ce cas précis.
+ *
+ * CORRIGÉ (26/07) : quand getPNForLID renvoie un JID AVEC suffixe d'appareil
+ * (ex. "50944480499:0@s.whatsapp.net"), l'envoi était accepté sans erreur
+ * mais jamais livré — même signature silencieuse que le problème LID
+ * d'origine, juste une couche plus bas. Le suffixe est retiré avant tout
+ * envoi.
  */
 async function resoudreJidReel(jid) {
   if (!jid || !jid.endsWith('@lid')) return jid;
@@ -161,8 +167,19 @@ async function resoudreJidReel(jid) {
     if (lidStore?.getPNForLID) {
       const pn = await lidStore.getPNForLID(jid);
       if (pn) {
-        console.log(`[WHATSAPP] LID résolu → JID réel : ${jid} → ${pn}`);
-        return pn;
+        // CORRIGÉ : getPNForLID peut renvoyer un JID avec suffixe d'appareil
+        // (ex. "50944480499:0@s.whatsapp.net") — vu en prod le 26/07, message
+        // "envoyé" sans erreur mais jamais livré. La forme canonique pour
+        // sendMessage() est SANS ce suffixe (comparer avec des libs tierces
+        // de canonicalisation LID qui retirent systématiquement ce ":N" avant
+        // envoi). On le retire ici, une seule fois, au bon endroit — pas à
+        // chaque appelant.
+        const pnCanonique = pn.replace(/:\d+(?=@)/, '');
+        if (pnCanonique !== pn) {
+          console.log(`[WHATSAPP] Suffixe d'appareil retiré : ${pn} → ${pnCanonique}`);
+        }
+        console.log(`[WHATSAPP] LID résolu → JID réel : ${jid} → ${pnCanonique}`);
+        return pnCanonique;
       }
     }
   } catch (err) {
