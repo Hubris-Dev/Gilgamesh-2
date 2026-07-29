@@ -19,6 +19,13 @@ import { parseMessageBrute } from '../utils/parser.js';
 const NOM_CANAL = 'whatsapp';
 const MAX_TENTATIVES_RECONNEXION = 10;
 const AUTH_DIR = path.join(process.cwd(), 'auth');
+// NOUVEAU (diagnostic) : la socket est configurée avec defaultQueryTimeoutMs: 0
+// (aucun timeout natif Baileys) — un sendMessage() qui reste bloqué en interne
+// (ex. établissement de session Signal avec un appareil jamais contacté)
+// n'aurait sinon JAMAIS levé d'erreur : juste un silence indéfini, impossible
+// à distinguer d'un redéploiement ou d'un crash externe dans les logs. Ce
+// timeout applicatif transforme ce silence en erreur explicite et loggée.
+const ENVOI_TIMEOUT_MS = 20000;
 
 let sock = null;
 let tentatives = 0;
@@ -190,10 +197,32 @@ async function resoudreJidReel(jid) {
   return jid;
 }
 
+/**
+ * ENVOYERAVECTIMEOUT — Course entre sock.sendMessage() et un timeout local.
+ * Voir ENVOI_TIMEOUT_MS plus haut : sans ça, un envoi bloqué en interne par
+ * Baileys ne se termine ni en succès ni en erreur, il reste juste pendant —
+ * indiscernable d'un process tué de l'extérieur dans les logs.
+ */
+function envoyerAvecTimeout(dest, text) {
+  return Promise.race([
+    sock.sendMessage(dest, { text }),
+    new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`Timeout ${ENVOI_TIMEOUT_MS / 1000}s — sendMessage() n'a jamais répondu pour ${dest}`)),
+        ENVOI_TIMEOUT_MS
+      )
+    ),
+  ]);
+}
+
 async function handleReponsePrete(payload) {
+  console.log(`[WHATSAPP] reponse:prete reçu du Sang — target=${payload?.target || '?'}`);
   try {
     const { target, text, isGroup } = payload;
-    if (!sock || !target || !text) return;
+    if (!sock || !target || !text) {
+      console.warn(`[WHATSAPP] Envoi abandonné — sock=${!!sock} target=${!!target} text=${!!text}`);
+      return;
+    }
     // Le JID peut déjà être complet (@s.whatsapp.net, @g.us, ou le format
     // récent @lid) — ne JAMAIS ajouter @s.whatsapp.net s'il y a déjà un
     // suffixe, sinon on obtient un JID cassé du type "xxxx@lid@s.whatsapp.net"
@@ -201,7 +230,8 @@ async function handleReponsePrete(payload) {
     // lever une erreur JS propre.
     const jidResolu = await resoudreJidReel(target);
     const dest = jidResolu.includes('@') ? jidResolu : jidResolu + '@s.whatsapp.net';
-    await sock.sendMessage(dest, { text });
+    console.log(`[WHATSAPP] Envoi en cours → ${dest} (${ENVOI_TIMEOUT_MS / 1000}s max)...`);
+    await envoyerAvecTimeout(dest, text);
     console.log(`[WHATSAPP] ✓ Message envoyé à ${dest}`);
   } catch (err) {
     console.error('[WHATSAPP] Erreur envoi :', err.message);
