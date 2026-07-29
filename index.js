@@ -25,12 +25,35 @@ import { cleanNow } from './utils/cleanup.js';
 // que stdout ait fini de flush sur Render, d'où l'impression de "crash sans
 // logs". Ces deux handlers garantissent qu'on logge TOUJOURS la vraie cause
 // avant que quoi que ce soit ne puisse arrêter le process.
+/**
+ * RESUMERERREUR — Résumé sûr d'une erreur/rejet, quelle que soit sa forme.
+ *
+ * CORRIGÉ (29/07) : avant, `reason && reason.stack ? reason.stack : reason`
+ * imprimait l'objet BRUT dès qu'il n'avait pas de `.stack` — vu en prod :
+ * un objet de session Signal complet (clés privées, root key, ratchet...)
+ * balancé tel quel dans les logs Render lors d'un rejet côté Baileys/
+ * libsignal. Double problème : fuite de matériel crypto dans les logs, ET
+ * 40 lignes de buffers illisibles qui cachaient le vrai nom/message de
+ * l'erreur — impossible de diagnostiquer quoi que ce soit derrière ça.
+ * Ici : jamais de dump intégral d'un objet non-Error, juste son type et ses
+ * clés de premier niveau (assez pour chercher l'erreur précise, sans jamais
+ * imprimer les valeurs).
+ */
+function resumerErreur(err) {
+  if (err instanceof Error) return err.stack || err.message;
+  if (err && typeof err === 'object') {
+    const cles = Object.keys(err).join(', ') || 'aucune';
+    return `[objet non-Error] constructeur=${err.constructor?.name || '?'} clés de premier niveau=${cles}`;
+  }
+  return String(err);
+}
+
 process.on('unhandledRejection', (reason) => {
-  console.error('[SQUELETTE] Rejet de promesse non géré :', reason && reason.stack ? reason.stack : reason);
+  console.error('[SQUELETTE] Rejet de promesse non géré :', resumerErreur(reason));
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('[SQUELETTE] Exception non capturée :', err && err.stack ? err.stack : err);
+  console.error('[SQUELETTE] Exception non capturée :', resumerErreur(err));
   // On ne fait PAS process.exit() ici : après une uncaughtException, Node
   // est dans un état possiblement instable, mais pour un bot conversationnel
   // il vaut mieux tenter de continuer et logger que de mourir en silence.
