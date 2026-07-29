@@ -19,42 +19,20 @@ import { parseMessageBrute } from '../utils/parser.js';
 const NOM_CANAL = 'whatsapp';
 const MAX_TENTATIVES_RECONNEXION = 10;
 const AUTH_DIR = path.join(process.cwd(), 'auth');
-// NOUVEAU (diagnostic) : la socket est configurée avec defaultQueryTimeoutMs: 0
-// (aucun timeout natif Baileys) — un sendMessage() qui reste bloqué en interne
-// (ex. établissement de session Signal avec un appareil jamais contacté)
-// n'aurait sinon JAMAIS levé d'erreur : juste un silence indéfini, impossible
-// à distinguer d'un redéploiement ou d'un crash externe dans les logs. Ce
-// timeout applicatif transforme ce silence en erreur explicite et loggée.
 const ENVOI_TIMEOUT_MS = 20000;
 
 let sock = null;
 let tentatives = 0;
-let isConnecting = false;   // Bloque les connect() concurrents
-
-// ─── Injection de Session Base64 ───
+let isConnecting = false;
 
 async function ingestBase64Session() {
   const credsPath = path.join(AUTH_DIR, 'creds.json');
-
-  // BUG CORRIGÉ : avant, cette fonction tournait à CHAQUE connect() — y compris
-  // à chaque reconnexion. Ça réécrivait creds.json avec le SESSION_BASE64 figé
-  // de l'env var, effaçant les clés de session à jour que Baileys venait de
-  // sauvegarder (via saveCreds). Ce rollback désynchronise le chiffrement
-  // Signal et finit par faire révoquer la session par WhatsApp (Bad MAC / 401).
-  // Maintenant : on n'ingère QUE s'il n'existe encore aucune session locale.
-  //
-  // IMPORTANT (upgrade v7) : une session/creds.json générée sous Baileys 6.x
-  // ne contient pas les clés lid-mapping / device-list / tctoken que
-  // useMultiFileAuthState() v7 attend. Après cet upgrade, régénère un
-  // SESSION_BASE64 frais via un ré-appairage (Termux) plutôt que de réutiliser
-  // l'ancien — sinon la session risque d'être rejetée ou incomplète au démarrage.
   if (fs.existsSync(credsPath)) {
     console.log('[WHATSAPP] Session locale déjà présente — SESSION_BASE64 ignoré (évite un rollback).');
     return;
   }
 
   const base64Session = process.env.SESSION_BASE64;
-
   if (!base64Session) {
     console.error('[FATAL] Variable d\'environnement SESSION_BASE64 manquante.');
     process.exit(1);
@@ -66,7 +44,7 @@ async function ingestBase64Session() {
 
   try {
     const credsBuffer = Buffer.from(base64Session, 'base64');
-    const parsed = JSON.parse(credsBuffer.toString('utf-8')); // Vérification d'intégrité
+    const parsed = JSON.parse(credsBuffer.toString('utf-8'));
     await fs.promises.writeFile(credsPath, JSON.stringify(parsed, null, 2));
     console.log('[WHATSAPP] Clé Base64 ingérée et validée avec succès (premier démarrage).');
   } catch (err) {
@@ -74,8 +52,6 @@ async function ingestBase64Session() {
     process.exit(1);
   }
 }
-
-// ─── Handlers ───
 
 function handleConnectionUpdate(update) {
   const { connection, lastDisconnect } = update;
@@ -122,7 +98,7 @@ function handleMessagesUpsert({ messages, type }) {
       continue;
     }
     if (!propre.text) {
-      console.log(`[WHATSAPP] Message ignoré — texte vide (contenu non géré par extraireTexte : sticker, réaction, média sans légende...). De: ${propre.sender}`);
+      console.log(`[WHATSAPP] Message ignoré — texte vide. De: ${propre.sender}`);
       continue;
     }
 
@@ -138,34 +114,6 @@ function handleMessagesUpsert({ messages, type }) {
   }
 }
 
-/**
- * RESOUDRE_JID_REEL — Convertit un pseudo-JID @lid en vrai JID téléphone
- * (@s.whatsapp.net) avant l'envoi.
- *
- * CONTEXTE (bug Baileys documenté #1718, #1964, résolu par la lib en v7) :
- * WhatsApp adresse certains contacts via un identifiant privé @lid plutôt
- * que le numéro réel. Envoyer un message DIRECTEMENT à ce pseudo-JID
- * "réussit" côté code (sock.sendMessage ne lève aucune erreur) mais le
- * message reste bloqué "En attente..." côté destinataire et n'arrive jamais.
- *
- * Baileys v7 (>= rc.1) expose enfin le store interne pour ce mapping :
- * sock.signalRepository.lidMapping, avec getPNForLID / getLIDForPN /
- * storeLIDPNMapping(s) / getLIDsForPNs (voir guide de migration officiel,
- * https://baileys.wiki/docs/migration/to-v7.0.0/). C'est la méthode utilisée
- * ci-dessous.
- *
- * LIMITE CONNUE (issue #2133) : getPNForLID peut renvoyer null si le mapping
- * n'a pas encore été appris par le client (le contact n'a pas encore envoyé
- * de message "normal" observé par cette session) — dans ce cas on retombe
- * sur le LID brut, au même risque de non-livraison qu'avant. Pas de solution
- * garantie à 100% côté client documentée à ce jour pour ce cas précis.
- *
- * CORRIGÉ (26/07) : quand getPNForLID renvoie un JID AVEC suffixe d'appareil
- * (ex. "50944480499:0@s.whatsapp.net"), l'envoi était accepté sans erreur
- * mais jamais livré — même signature silencieuse que le problème LID
- * d'origine, juste une couche plus bas. Le suffixe est retiré avant tout
- * envoi.
- */
 async function resoudreJidReel(jid) {
   if (!jid || !jid.endsWith('@lid')) return jid;
 
@@ -174,13 +122,6 @@ async function resoudreJidReel(jid) {
     if (lidStore?.getPNForLID) {
       const pn = await lidStore.getPNForLID(jid);
       if (pn) {
-        // CORRIGÉ : getPNForLID peut renvoyer un JID avec suffixe d'appareil
-        // (ex. "50944480499:0@s.whatsapp.net") — vu en prod le 26/07, message
-        // "envoyé" sans erreur mais jamais livré. La forme canonique pour
-        // sendMessage() est SANS ce suffixe (comparer avec des libs tierces
-        // de canonicalisation LID qui retirent systématiquement ce ":N" avant
-        // envoi). On le retire ici, une seule fois, au bon endroit — pas à
-        // chaque appelant.
         const pnCanonique = pn.replace(/:\d+(?=@)/, '');
         if (pnCanonique !== pn) {
           console.log(`[WHATSAPP] Suffixe d'appareil retiré : ${pn} → ${pnCanonique}`);
@@ -193,16 +134,10 @@ async function resoudreJidReel(jid) {
     console.warn('[WHATSAPP] Résolution LID→PN a échoué :', err.message);
   }
 
-  console.warn(`[WHATSAPP] ⚠️ Impossible de résoudre le vrai JID pour ${jid} — envoi tenté sur le LID brut (mapping pas encore appris par cette session, voir issue Baileys #2133).`);
+  console.warn(`[WHATSAPP] ⚠️ Impossible de résoudre le vrai JID pour ${jid} — envoi tenté sur le LID brut.`);
   return jid;
 }
 
-/**
- * ENVOYERAVECTIMEOUT — Course entre sock.sendMessage() et un timeout local.
- * Voir ENVOI_TIMEOUT_MS plus haut : sans ça, un envoi bloqué en interne par
- * Baileys ne se termine ni en succès ni en erreur, il reste juste pendant —
- * indiscernable d'un process tué de l'extérieur dans les logs.
- */
 function envoyerAvecTimeout(dest, text) {
   return Promise.race([
     sock.sendMessage(dest, { text }),
@@ -223,11 +158,6 @@ async function handleReponsePrete(payload) {
       console.warn(`[WHATSAPP] Envoi abandonné — sock=${!!sock} target=${!!target} text=${!!text}`);
       return;
     }
-    // Le JID peut déjà être complet (@s.whatsapp.net, @g.us, ou le format
-    // récent @lid) — ne JAMAIS ajouter @s.whatsapp.net s'il y a déjà un
-    // suffixe, sinon on obtient un JID cassé du type "xxxx@lid@s.whatsapp.net"
-    // que Baileys ne peut pas chiffrer — ça casse la socket au lieu de juste
-    // lever une erreur JS propre.
     const jidResolu = await resoudreJidReel(target);
     const dest = jidResolu.includes('@') ? jidResolu : jidResolu + '@s.whatsapp.net';
     console.log(`[WHATSAPP] Envoi en cours → ${dest} (${ENVOI_TIMEOUT_MS / 1000}s max)...`);
@@ -238,20 +168,12 @@ async function handleReponsePrete(payload) {
   }
 }
 
-// ─── Connexion / Reconnexion ───
-
 function setupListeners() {
   sang.removeAllListeners('reponse:prete');
   sang.on('reponse:prete', handleReponsePrete);
 }
 
 async function reconnect() {
-  // CRITIQUE : fermer proprement l'ancien socket AVANT d'en recréer un
-  // nouveau. Avant, connect() était rappelé directement par-dessus l'ancien
-  // sock sans jamais le fermer : la connexion WebSocket Baileys sous-jacente
-  // restait ouverte en arrière-plan avec ses propres timers/keepalive,
-  // accumulant les handles à chaque micro-coupure réseau jusqu'à épuiser le
-  // process (c'est un des suspects principaux du crash silencieux).
   await cleanup();
   await new Promise(r => setTimeout(r, 5000));
   connect();
@@ -264,25 +186,17 @@ async function connect() {
   }
   isConnecting = true;
 
-  // GARDE-FOU : sans ça, un appel réseau bloqué (typiquement
-  // fetchLatestBaileysVersion(), qui n'a aucun timeout natif) fait rester
-  // isConnecting=true POUR TOUJOURS — plus aucune reconnexion ne peut jamais
-  // se déclencher, silence total, aucun log d'erreur (ce n'est pas un crash,
-  // juste une promesse qui ne se résout jamais). Ce watchdog force un reset
-  // après 45s et relance une tentative si connect() n'a toujours pas fini.
   const watchdog = setTimeout(() => {
     if (isConnecting) {
-      console.error('[WHATSAPP] connect() bloqué depuis 45s (probablement fetchLatestBaileysVersion) — reset forcé.');
+      console.error('[WHATSAPP] connect() bloqué depuis 45s — reset forcé.');
       isConnecting = false;
       reconnect();
     }
   }, 45000);
 
   try {
-    // 1. Injection UNIQUEMENT si aucune session locale n'existe déjà
     await ingestBase64Session();
 
-    // 2. Initialisation
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -324,11 +238,6 @@ async function cleanup() {
   sang.removeAllListeners('reponse:prete');
   if (sock) {
     try { sock.ev.removeAllListeners(); } catch (_) {}
-    // AVANT : on détachait juste les listeners JS, mais la connexion
-    // WebSocket sous-jacente de Baileys n'était jamais fermée — elle restait
-    // ouverte en mémoire (socket TCP + timers keepalive internes) même après
-    // qu'un nouveau sock ait été créé par-dessus. sock.end() la ferme pour
-    // de vrai et laisse le garbage collector récupérer l'ancien objet.
     try { sock.end(new Error('reconnexion — fermeture du socket précédent')); } catch (_) {}
     sock = null;
   }
