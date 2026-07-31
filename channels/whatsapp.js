@@ -13,7 +13,7 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   DisconnectReason,
 } from '@whiskeysockets/baileys';
-import { wrapSocket } from 'baileys-antiban';
+import { wrapWithSessionStability, LidResolver } from 'baileys-antiban';
 import { sang } from '../core/heartbeat.js';
 import { parseMessageBrute } from '../utils/parser.js';
 
@@ -21,6 +21,11 @@ const NOM_CANAL = 'whatsapp';
 const MAX_TENTATIVES_RECONNEXION = 10;
 const AUTH_DIR = path.join(process.cwd(), 'auth');
 const ENVOI_TIMEOUT_MS = 20000;
+
+// Créé UNE fois, au niveau module — pas à chaque connect()/reconnect(), pour
+// que le mapping LID↔PN appris survive aux reconnexions dans la durée de
+// vie du process (perdu seulement à un vrai redémarrage complet).
+const lidResolver = new LidResolver({ canonical: 'pn' });
 
 let sock = null;
 let tentatives = 0;
@@ -60,8 +65,8 @@ function handleConnectionUpdate(update) {
   if (connection === 'open') {
     tentatives = 0;
     console.log('[WHATSAPP] Connecté — worker actif.');
-    if (sock?.antiban?.getStats) {
-      console.log('[ANTIBAN]', JSON.stringify(sock.antiban.getStats()));
+    if (sock?.sessionHealthStats) {
+      console.log('[ANTIBAN]', JSON.stringify(sock.sessionHealthStats));
     }
     sang.emit('canal:connecte', { canal: NOM_CANAL });
   }
@@ -138,8 +143,6 @@ async function handleReponsePrete(payload) {
       console.warn(`[WHATSAPP] Envoi abandonné — sock=${!!sock} target=${!!target} text=${!!text}`);
       return;
     }
-    // La forme @lid n'est plus résolue manuellement ici : le socket
-    // (wrapSocket, voir connect()) canonicalise en interne.
     const dest = target.includes('@') ? target : target + '@s.whatsapp.net';
     console.log(`[WHATSAPP] Envoi en cours → ${dest} (${ENVOI_TIMEOUT_MS / 1000}s max)...`);
     await envoyerAvecTimeout(dest, text);
@@ -194,14 +197,22 @@ async function connect() {
       defaultQueryTimeoutMs: 0,
     });
 
-    // baileys-antiban : jidCanonicalizer règle le désync de session entre
-    // les deux formes de JID (@lid / @s.whatsapp.net). Rate limiting,
-    // warm-up et health monitoring activés par défaut — voir
-    // sock.antiban.getStats().
-    sock = wrapSocket(sock, {
-      jidCanonicalizer: {
-        enabled: true,
-        canonical: 'pn',
+    // baileys-antiban — Session Stability Module, dédié au bug confirmé
+    // (dual-JID Bad MAC). Wrap AVANT d'attacher les listeners pour que .ev
+    // reste accessible via `sock` partout ailleurs dans ce fichier.
+    sock = wrapWithSessionStability(sock, {
+      canonicalJidNormalization: true,
+      healthMonitoring: true,
+      lidResolver,
+      health: {
+        badMacThreshold: 3,
+        badMacWindowMs: 60_000,
+        onDegraded: (stats) => {
+          console.error(`[ANTIBAN] 🔴 Session dégradée : ${stats.badMacCount} Bad MAC en 60s`);
+        },
+        onRecovered: () => {
+          console.log('[ANTIBAN] 🟢 Session récupérée.');
+        },
       },
     });
 
