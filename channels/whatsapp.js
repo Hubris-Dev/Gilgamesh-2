@@ -13,6 +13,7 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   DisconnectReason,
 } from '@whiskeysockets/baileys';
+import { wrapSocket } from 'baileys-antiban';
 import { sang } from '../core/heartbeat.js';
 import { parseMessageBrute } from '../utils/parser.js';
 
@@ -59,6 +60,9 @@ function handleConnectionUpdate(update) {
   if (connection === 'open') {
     tentatives = 0;
     console.log('[WHATSAPP] Connecté — worker actif.');
+    if (sock?.antiban?.getStats) {
+      console.log('[ANTIBAN]', JSON.stringify(sock.antiban.getStats()));
+    }
     sang.emit('canal:connecte', { canal: NOM_CANAL });
   }
 
@@ -114,30 +118,6 @@ function handleMessagesUpsert({ messages, type }) {
   }
 }
 
-async function resoudreJidReel(jid) {
-  if (!jid || !jid.endsWith('@lid')) return jid;
-
-  try {
-    const lidStore = sock?.signalRepository?.lidMapping;
-    if (lidStore?.getPNForLID) {
-      const pn = await lidStore.getPNForLID(jid);
-      if (pn) {
-        const pnCanonique = pn.replace(/:\d+(?=@)/, '');
-        if (pnCanonique !== pn) {
-          console.log(`[WHATSAPP] Suffixe d'appareil retiré : ${pn} → ${pnCanonique}`);
-        }
-        console.log(`[WHATSAPP] LID résolu → JID réel : ${jid} → ${pnCanonique}`);
-        return pnCanonique;
-      }
-    }
-  } catch (err) {
-    console.warn('[WHATSAPP] Résolution LID→PN a échoué :', err.message);
-  }
-
-  console.warn(`[WHATSAPP] ⚠️ Impossible de résoudre le vrai JID pour ${jid} — envoi tenté sur le LID brut.`);
-  return jid;
-}
-
 function envoyerAvecTimeout(dest, text) {
   return Promise.race([
     sock.sendMessage(dest, { text }),
@@ -158,8 +138,9 @@ async function handleReponsePrete(payload) {
       console.warn(`[WHATSAPP] Envoi abandonné — sock=${!!sock} target=${!!target} text=${!!text}`);
       return;
     }
-    const jidResolu = await resoudreJidReel(target);
-    const dest = jidResolu.includes('@') ? jidResolu : jidResolu + '@s.whatsapp.net';
+    // La forme @lid n'est plus résolue manuellement ici : le socket
+    // (wrapSocket, voir connect()) canonicalise en interne.
+    const dest = target.includes('@') ? target : target + '@s.whatsapp.net';
     console.log(`[WHATSAPP] Envoi en cours → ${dest} (${ENVOI_TIMEOUT_MS / 1000}s max)...`);
     await envoyerAvecTimeout(dest, text);
     console.log(`[WHATSAPP] ✓ Message envoyé à ${dest}`);
@@ -211,6 +192,17 @@ async function connect() {
       markOnlineOnConnect: true,
       connectTimeoutMs: 120000,
       defaultQueryTimeoutMs: 0,
+    });
+
+    // baileys-antiban : jidCanonicalizer règle le désync de session entre
+    // les deux formes de JID (@lid / @s.whatsapp.net). Rate limiting,
+    // warm-up et health monitoring activés par défaut — voir
+    // sock.antiban.getStats().
+    sock = wrapSocket(sock, {
+      jidCanonicalizer: {
+        enabled: true,
+        canonical: 'pn',
+      },
     });
 
     sock.ev.on('creds.update', saveCreds);
