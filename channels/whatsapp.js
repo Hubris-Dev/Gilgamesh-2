@@ -22,9 +22,6 @@ const MAX_TENTATIVES_RECONNEXION = 10;
 const AUTH_DIR = path.join(process.cwd(), 'auth');
 const ENVOI_TIMEOUT_MS = 20000;
 
-// Créé UNE fois, au niveau module — pas à chaque connect()/reconnect(), pour
-// que le mapping LID↔PN appris survive aux reconnexions dans la durée de
-// vie du process (perdu seulement à un vrai redémarrage complet).
 const lidResolver = new LidResolver({ canonical: 'pn' });
 
 let sock = null;
@@ -197,9 +194,6 @@ async function connect() {
       defaultQueryTimeoutMs: 0,
     });
 
-    // baileys-antiban — Session Stability Module, dédié au bug confirmé
-    // (dual-JID Bad MAC). Wrap AVANT d'attacher les listeners pour que .ev
-    // reste accessible via `sock` partout ailleurs dans ce fichier.
     sock = wrapWithSessionStability(sock, {
       canonicalJidNormalization: true,
       healthMonitoring: true,
