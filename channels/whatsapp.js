@@ -7,12 +7,14 @@ import path from 'node:path';
 import fs from 'node:fs';
 import pino from 'pino';
 import { Boom } from '@hapi/boom';
-import makeWASocket, {
+import * as baileys from '@whiskeysockets/baileys';
+const {
+  default: makeWASocket,
   useMultiFileAuthState,
   makeCacheableSignalKeyStore,
   fetchLatestBaileysVersion,
   DisconnectReason,
-} from '@whiskeysockets/baileys';
+} = baileys;
 import { wrapWithSessionStability, LidResolver } from 'baileys-antiban';
 import { sang } from '../core/heartbeat.js';
 import { parseMessageBrute } from '../utils/parser.js';
@@ -223,6 +225,18 @@ async function connect() {
     console.error('[WHATSAPP] Echec de connexion :', err.message);
     sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: err.message });
     isConnecting = false;
+
+    // Compter cette tentative comme une déconnexion et retenter avec backoff
+    tentatives += 1;
+    if (tentatives > MAX_TENTATIVES_RECONNEXION) {
+      console.error('[WHATSAPP] ' + MAX_TENTATIVES_RECONNEXION + ' échecs — arrêt critique.');
+      process.exit(1);
+    }
+
+    const delayMs = Math.min(5000 * tentatives, 60_000); // backoff linéaire limité à 60s
+    console.warn(`[WHATSAPP] Nouvelle tentative dans ${delayMs/1000}s (tentative ${tentatives}/${MAX_TENTATIVES_RECONNEXION})`);
+    setTimeout(() => { reconnect(); }, delayMs);
+
     return null;
   }
 }
