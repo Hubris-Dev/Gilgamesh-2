@@ -127,6 +127,8 @@ export function activateBrain() {
       messageId,
       isGroup,
       groupId,
+      isChannel,
+      channelId,
       mediaType,
       mediaPath,
     } = payload;
@@ -169,6 +171,8 @@ export function activateBrain() {
         canal,
         isGroup,
         groupName: payload.groupName || null,
+        isChannel,
+        channelId,
         timestamp: new Date().toISOString(),
       };
 
@@ -210,7 +214,21 @@ export function activateBrain() {
         console.warn("[NERF] Enregistrement mémoire utilisateur échoué.", err.message);
       }
 
-      if (decision.actionType === 'reply') {
+      if (decision.actionType === 'reply' && isChannel) {
+        // Une chaîne (@newsletter) n'est pas une conversation à double sens —
+        // sock.sendMessage() normal vers ce JID ne se comporte pas comme un
+        // DM/groupe (voir muscle.js: publier sur une chaîne passe par la
+        // commande "speakchannel", API newsletter dédiée). Si le Nerf a quand
+        // même renvoyé "reply" ici (prompt pas toujours suivi à la lettre par
+        // le modèle), on l'archive comme contexte sans tenter un envoi cassé.
+        console.log(`[NERF] "reply" reçu pour un message de chaîne (${channelId}) — pas d'envoi direct, archivé comme contexte seulement.`);
+        try {
+          await appendMemory(senderId, null, 'user', sanitized.nettoye);
+        } catch (err) {
+          console.warn("[NERF] Enregistrement mémoire (chaîne) échoué.", err.message);
+        }
+
+      } else if (decision.actionType === 'reply') {
         // GARDE-FOU AJOUTÉ : si l'IA renvoie actionType "reply" avec un JSON
         // valide mais SANS replyContent (champ oublié par le modèle), le
         // message disparaissait complètement plus loin dans whatsapp.js
@@ -427,7 +445,9 @@ function buildContextualPrompt(systemPrompt, history, userMessage, metadata, med
 
   prompt += `=== CONTEXTE CANAL ===\n`;
   prompt += `Canal: ${metadata.canal}\n`;
-  if (metadata.isGroup) {
+  if (metadata.isChannel) {
+    prompt += `⚠️ Ceci vient d'une CHAÎNE WhatsApp (@newsletter) que tu suis (${metadata.channelId}) — pas une conversation à double sens. Tu ne peux pas "répondre" directement comme dans un DM. Si tu veux publier quelque chose, utilise actionType "execute" avec la commande "speakchannel". Sinon, "ignore" — la plupart des posts de chaîne ne demandent pas d'action.\n`;
+  } else if (metadata.isGroup) {
     prompt += `Groupe: ${metadata.groupName || 'Inconnu'} (${metadata.groupId})\n`;
   } else {
     prompt += `Conversation privée avec ${metadata.senderName}\n`;
