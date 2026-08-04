@@ -58,6 +58,18 @@ async function ingestBase64Session() {
   }
 }
 
+const remoteJid = msgBrut.key.remoteJid || '';
+const isGroup = remoteJid.endsWith('@g.us');
+const isChannel = remoteJid.endsWith('@newsletter');
+
+sang.emit('canal:message:recu', {
+  senderId: propre.sender, text: propre.text, canal: NOM_CANAL,
+  messageId: propre.messageId, senderName: propre.nomAffiche,
+  isGroup, groupId: isGroup ? remoteJid : null,
+  isChannel, channelId: isChannel ? remoteJid : null,
+  mediaType: null, mediaPath: null,
+});
+
 function handleConnectionUpdate(update) {
   const { connection, lastDisconnect } = update;
 
