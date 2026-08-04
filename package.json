@@ -17,6 +17,7 @@
     "mongodb": "^7.4.0",
     "@whiskeysockets/baileys": "^6.7.18",
     "baileys-antiban": "^4.10.0",
+    "adm-zip": "^0.5.16",
     "@hapi/boom": "^10.0.1",
     "pino": "^9.5.0",
     "axios": "^1.7.0",
