@@ -25,6 +25,7 @@ export function parseMessageBrute(msgBrut) {
 
   const remoteJid = msgBrut.key.remoteJid || '';
   const isGroup = remoteJid.endsWith('@g.us');
+  const isChannel = remoteJid.endsWith('@newsletter');
 
   return {
     sender: isGroup ? (msgBrut.key.participant || '') : remoteJid,
@@ -32,21 +33,7 @@ export function parseMessageBrute(msgBrut) {
     text: extraireTexte(msgBrut.message),
     timestamp: msgBrut.messageTimestamp || null,
     isGroup,
+    isChannel,
     nomAffiche: msgBrut.pushName || null,
   };
 }
-//decisions de messages group et chaîne en résumé tu sais simple code de reconnaissance
-
-const remoteJid = msgBrut.key.remoteJid || '';
-const isGroup = remoteJid.endsWith('@g.us');
-const isChannel = remoteJid.endsWith('@newsletter');
-
-return {
-  sender: isGroup ? (msgBrut.key.participant || '') : remoteJid,
-  messageId: msgBrut.key.id || '',
-  text: extraireTexte(msgBrut.message),
-  timestamp: msgBrut.messageTimestamp || null,
-  isGroup,
-  isChannel,
-  nomAffiche: msgBrut.pushName || null,
-};
