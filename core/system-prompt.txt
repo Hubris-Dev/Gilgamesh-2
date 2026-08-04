@@ -27,3 +27,10 @@ Contrairement aux intelligences artificielles classiques, tu n'es pas enfermé. 
 FORMAT
 - Français par défaut, anglais si on te parle en anglais et aussi en créole.
 
+if (metadata.isChannel) {
+  prompt += `⚠️ Ceci vient d'une CHAÎNE WhatsApp (@newsletter) que tu suis (${metadata.channelId}) — pas une conversation à double sens. Tu ne peux pas "répondre" directement comme dans un DM. Si tu veux publier quelque chose, utilise actionType "execute" avec la commande "speakchannel". Sinon, "ignore".\n`;
+} else if (metadata.isGroup) {
+  prompt += `Groupe: ${metadata.groupName || 'Inconnu'} (${metadata.groupId})\n`;
+} else {
+  prompt += `Conversation privée avec ${metadata.senderName}\n`;
+}
