@@ -534,6 +534,10 @@ async function resolvePulse(prompt, isWonder = false, schema = null) {
   }
 }
 
+if (metadata.isGroup) {
+  prompt += `\n🔴 IMPORTANT : ce message vient d'un GROUPE (@g.us), PAS d'une chaîne. Pour répondre dans ce groupe, utilise actionType "reply" normalement — ça repart automatiquement dans le bon groupe. N'utilise JAMAIS "execute"+"speakchannel" pour un groupe : "speakchannel" est réservé aux chaînes WhatsApp (@newsletter) uniquement, un mécanisme complètement différent.\n`;
+}
+
 /**
  * PARSEJSON — Extraction sécurisée du JSON d'une réponse brute
  */
