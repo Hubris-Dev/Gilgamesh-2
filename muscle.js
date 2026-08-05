@@ -13,6 +13,7 @@ export function activateMuscle() {
     sang.on('intention:muscle', async (payload) => {
         const { target, command, args = {}, canal, isGroup, groupId, demandedBy } = payload;
         console.log(`[MUSCLE] Intention reçue: ${command} → ${target}`);
+
         // "creategroup" ajouté : réservée à HUBRIS, comme les autres actions
         // qui modifient la messagerie elle-même plutôt que juste répondre.
         // Chaînes ajoutées : rejoindre/quitter sont sensibles (changent ce à quoi
@@ -20,39 +21,54 @@ export function activateMuscle() {
         const commandesSensibles = ['block', 'unblock', 'kick', 'promote', 'demote', 'leave', 'creategroup', 'joinchannel', 'leavechannel'];
         if (commandesSensibles.includes(command.toLowerCase()) && !isWonder(demandedBy)) {
             console.warn(`[MUSCLE] Commande "${command}" refusée — ${target} n'est pas HUBRIS.`);
-            sang.emit('muscle:failed', { target, command, canal, isGroup, groupId, success: false, error: 'Autorisation refusée : commande réservée à HUBRIS.' });
+            sang.emit('muscle:failed', { 
+                target, command, canal, isGroup, groupId, 
+                success: false, 
+                error: 'Autorisation refusée : commande réservée à HUBRIS.' 
+            });
             return;
         }
+
         try {
-            const result = await executeCommand(command, target, args, canal);
+            // ✅ NOUVEAU : Passe isGroup et groupId à executeCommand
+            const result = await executeCommand(command, target, args, canal, isGroup, groupId);
             sang.emit('muscle:executed', { target, command, canal, isGroup, groupId, success: true, result });
             console.log(`[MUSCLE] ${command} exécuté avec succès.`);
         } catch (err) {
             console.error(`[MUSCLE] Erreur lors de l'exécution ${command}:`, err.message);
-            sang.emit('muscle:failed', { target, command, canal, isGroup, groupId, success: false, error: err.message });
+            sang.emit('muscle:failed', { 
+                target, command, canal, isGroup, groupId, 
+                success: false, 
+                error: err.message 
+            });
         }
     });
 }
 
-export async function executeCommand(command, target, args, canal) {
+// ✅ NOUVEAU : Ajout de isGroup et groupId en paramètres
+export async function executeCommand(command, target, args, canal, isGroup, groupId) {
     const sock = getSocket();
     if (!sock) throw new Error('Client WhatsApp non disponible (canal non initialisé).');
+
+    // ✅ NOUVEAU : Détermine la cible réelle (groupe ou DM)
+    const realTarget = isGroup && groupId ? groupId : target;
+
     switch (command.toLowerCase()) {
-        case 'block': return await blockUser(sock, target);
-        case 'unblock': return await unblockUser(sock, target);
-        case 'mute': return await muteGroup(sock, target, args.duration || 86400000);
-        case 'unmute': return await unmuteGroup(sock, target);
-        case 'leave': return await leaveGroup(sock, target);
+        case 'block': return await blockUser(sock, realTarget);
+        case 'unblock': return await unblockUser(sock, realTarget);
+        case 'mute': return await muteGroup(sock, realTarget, args.duration || 86400000);
+        case 'unmute': return await unmuteGroup(sock, realTarget);
+        case 'leave': return await leaveGroup(sock, realTarget);
         case 'join': return await joinGroup(sock, args.code);
-        case 'promote': return await promoteUser(sock, target, args.groupId);
-        case 'demote': return await demoteUser(sock, target, args.groupId);
-        case 'kick': return await kickUser(sock, target, args.groupId);
+        case 'promote': return await promoteUser(sock, args.userId || realTarget, args.groupId || realTarget);
+        case 'demote': return await demoteUser(sock, args.userId || realTarget, args.groupId || realTarget);
+        case 'kick': return await kickUser(sock, args.userId || realTarget, args.groupId || realTarget);
         case 'status': return await setStatus(sock, args.text);
         case 'creategroup': return await createGroup(sock, args.subject, args.participants, target);
         case 'joinchannel': return await joinChannel(sock, args.inviteCode, args.channelJid);
         case 'leavechannel': return await leaveChannel(sock, args.channelJid);
         case 'viewchannel': return await viewChannel(sock, args.inviteCode, args.channelJid);
-        case 'speakchannel': return await speakChannel(sock, args.channelJid, args.text);
+        case 'speakchannel': return await speakChannel(sock, args.channelJid || realTarget, args.text, isGroup, groupId);
         default: throw new Error(`Commande inconnue: ${command}`);
     }
 }
@@ -115,8 +131,11 @@ async function viewChannel(sock, inviteCode, channelJid) {
     return { action: 'viewchannel', metadata: jid };
 }
 
-async function speakChannel(sock, channelJid, text) {
+// ✅ NOUVEAU : Utilise groupId si c'est un groupe
+async function speakChannel(sock, channelJid, text, isGroup = false, groupId = null) {
     if (!channelJid || !text) throw new Error('channelJid et text requis pour parler dans une chaîne.');
-    await sock.sendMessage(channelJid, { text });
-    return { action: 'speakchannel', channelJid, status: 'posted' };
+    // ✅ NOUVEAU : Utilise groupId si c'est un groupe
+    const target = isGroup ? groupId : channelJid;
+    await sock.sendMessage(target, { text });
+    return { action: 'speakchannel', channelJid: target, status: 'posted' };
 }
