@@ -1,32 +1,16 @@
 // core/heartbeat.js
 // Système Cardiovasculaire — Pouls + Sang
-// RÔLE : le rythme (Pouls) ET la circulation de l'information (Sang) vivent
-// dans le même organe — comme en anatomie réelle, c'est le cœur qui fait
-// circuler le sang. Voir CODEX, Système 5.
-//
-// LE SANG : event bus central. Aucun organe ne s'appelle directement —
-// tout passe par sang.emit()/sang.on(). Voir Loi 1 (La Frontière).
-//
-// LE POULS : boucle active dès le démarrage, journalise l'état de chaque
-// canal en continu — même sans message entrant. Différence entre "le
-// serveur tourne" et "Gilgamesh SAIT qu'il tourne" (Nœud Catalepséen, Partie 3).
-//
-// CORRECTION : remplace l'ancien core/sang.js. Le Sang n'est pas un système
-// à part — il vit ici.
+// PATCH 08/2025 : Ajout d'un healthcheck WhatsApp actif via getSocket()
 
 import EventEmitter from 'node:events';
 
-// ─── LE SANG ──────────────────────────────────────────────────────
 class Sang extends EventEmitter {
   constructor() {
     super();
     this.setMaxListeners(50);
-
-    // Garde-fou Loi 4 — un 'error' émis sans listener plante Node autrement.
     this.on('error', (err) => {
       console.error('[SANG] Erreur non gérée transmise par un organe :', err);
     });
-
     this._debug = process.env.DEBUG_SANG === 'true';
   }
 
@@ -40,11 +24,8 @@ class Sang extends EventEmitter {
 
 export const sang = new Sang();
 
-// ─── LE POULS ─────────────────────────────────────────────────────
 const INTERVALLE_MS = Number(process.env.POULS_INTERVALLE_MS) || 30000;
 
-// État connu de chaque canal — mis à jour par les canaux eux-mêmes via le
-// Sang, jamais lu/écrit directement depuis l'extérieur (Loi 1).
 const etatCanaux = {};
 
 sang.on('canal:connecte', ({ canal } = {}) => {
@@ -56,12 +37,34 @@ sang.on('canal:deconnecte', ({ canal, raison } = {}) => {
 
 let intervalle = null;
 
+// PATCH : référence à getSocket — injectée par index.js
+let _getSocket = null;
+export function setGetSocket(fn) {
+  _getSocket = fn;
+}
+
 export function start() {
   if (intervalle) return;
 
   intervalle = setInterval(() => {
     const horodatage = new Date().toISOString();
     const canaux = Object.keys(etatCanaux).length ? { ...etatCanaux } : { aucun: 'aucun canal enregistré' };
+
+    // PATCH : vérifier l'état réel de la socket WhatsApp
+    if (_getSocket) {
+      try {
+        const sock = _getSocket();
+        if (sock && sock.user) {
+          canaux['whatsapp'] = 'connecté (vérifié)';
+        } else if (sock) {
+          canaux['whatsapp'] = '⚠️ socket présente mais non authentifiée';
+        } else {
+          canaux['whatsapp'] = '❌ déconnecté';
+        }
+      } catch (err) {
+        canaux['whatsapp'] = 'erreur vérification: ' + err.message;
+      }
+    }
 
     console.log(`[POULS] ${horodatage} — battement. Canaux :`, canaux);
     sang.emit('pouls:battement', { horodatage, canaux });
