@@ -194,14 +194,18 @@ function envoyerAvecTimeout(dest, text) {
 async function handleReponsePrete(payload) {
   console.log(`[WHATSAPP] reponse:prete reçu du Sang — target=${payload?.target || '?'}`);
   try {
-    const { target, text, isGroup } = payload;
+    const { target, text, isGroup, groupId } = payload;
     if (!sock || !target || !text) {
       console.warn(`[WHATSAPP] Envoi abandonné — sock=${!!sock} target=${!!target} text=${!!text}`);
       return;
     }
-    // @lid canonicalisé par le socket (wrapWithSessionStability, voir
-    // connect()) — plus de résolution manuelle ici.
-    const dest = target.includes('@') ? target : target + '@s.whatsapp.net';
+    // CORRIGÉ (04/08) : `target` est le JID de la personne qui a parlé — pour
+    // un message de groupe, c'est le participant individuel, PAS le groupe
+    // (voir parseMessageBrute). Avant, on envoyait TOUJOURS à `target`, donc
+    // toute réponse à un message de groupe partait en DM privé au lieu de
+    // revenir dans le groupe. Si isGroup, la cible réelle est groupId.
+    const cible = (isGroup && groupId) ? groupId : target;
+    const dest = cible.includes('@') ? cible : cible + '@s.whatsapp.net';
     console.log(`[WHATSAPP] Envoi en cours → ${dest} (${ENVOI_TIMEOUT_MS / 1000}s max)...`);
     await envoyerAvecTimeout(dest, text);
     console.log(`[WHATSAPP] ✓ Message envoyé à ${dest}`);
