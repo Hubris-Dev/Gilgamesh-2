@@ -166,12 +166,21 @@ function handleMessagesUpsert({ messages, type }) {
     const isGroup = remoteJid.endsWith('@g.us');
     const isChannel = remoteJid.endsWith('@newsletter');
 
+    // ✅ NOUVEAU : Log de débogage
+    console.log(`[WHATSAPP] remoteJid: ${remoteJid}, isGroup: ${isGroup}, groupId: ${isGroup ? remoteJid : null}`);
+
     sang.emit('canal:message:recu', {
-      senderId: propre.sender, text: propre.text, canal: NOM_CANAL,
-      messageId: propre.messageId, senderName: propre.nomAffiche,
-      isGroup, groupId: isGroup ? remoteJid : null,
-      isChannel, channelId: isChannel ? remoteJid : null,
-      mediaType: null, mediaPath: null,
+      senderId: propre.sender,
+      text: propre.text,
+      canal: NOM_CANAL,
+      messageId: propre.messageId,
+      senderName: propre.nomAffiche,
+      isGroup,
+      groupId: isGroup ? remoteJid : null,
+      isChannel,
+      channelId: isChannel ? remoteJid : null,
+      mediaType: null,
+      mediaPath: null,
     });
   }
 }
