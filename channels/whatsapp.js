@@ -4,6 +4,7 @@
 //   - Watchdog de connect() corrigé (finally block garantit reset de isConnecting)
 //   - Retry Queue branchée : envois échoués passent par retryableWrapper()
 //   - Export de isSocketAlive() pour le healthcheck externe
+//   - FIX 08/05 : envoyerAvecTimeout corrigé — plus de double log, re-throw après Rate
 
 import path from 'node:path';
 import fs from 'node:fs';
@@ -130,6 +131,8 @@ function handleMessagesUpsert({ messages, type }) {
     const isGroup = remoteJid.endsWith('@g.us');
     const isChannel = remoteJid.endsWith('@newsletter');
 
+    console.log(`[WHATSAPP] remoteJid: ${remoteJid}, isGroup: ${isGroup}, groupId: ${isGroup ? remoteJid : null}`);
+
     sang.emit('canal:message:recu', {
       senderId: propre.sender,
       text: propre.text,
@@ -147,7 +150,11 @@ function handleMessagesUpsert({ messages, type }) {
 }
 
 /**
- * ENVOYERAVECTIMEOUT — PATCH : utilise la Rate si l'envoi échoue
+ * ENVOYERAVECTIMEOUT — FIX 08/05 :
+ * - Ne plus loguer "✓ Message envoyé" si ça a échoué
+ * - Si l'envoi échoue avec "not-acceptable", ne PAS mettre en Rate
+ *   (réessayer ne changera rien — c'est un refus du serveur, pas un timeout)
+ * - Re-throw l'erreur pour que handleReponsePrete sache que ça a échoué
  */
 function envoyerAvecTimeout(dest, text) {
   return Promise.race([
@@ -159,30 +166,54 @@ function envoyerAvecTimeout(dest, text) {
       )
     ),
   ]).catch(async (err) => {
-    console.warn(`[WHATSAPP] Envoi échoué, mise en file via la Rate: ${err.message}`);
+    const errMsg = err?.message || String(err);
+    console.error(`[WHATSAPP] ❌ Échec envoi → ${dest}: ${errMsg}`);
+
+    // "not-acceptable" = le serveur WhatsApp refuse ce message.
+    // Pas la peine de réessayer via la Rate — ça échouera pareil.
+    // Causes possibles : Gilgamesh n'est plus dans le groupe, ou le JID
+    // est invalide, ou le format n'est pas accepté.
+    if (errMsg.includes('not-acceptable')) {
+      console.error(`[WHATSAPP] ⛔ not-acceptable — abandon définitif pour ${dest}. Vérifie que Gilgamesh est bien dans ce groupe.`);
+      throw err; // Pas de Rate, on abandonne
+    }
+
+    // Pour les autres erreurs (timeout, réseau), utiliser la Rate
     try {
       const { queue } = await import('../core/retry-queue.js');
       queue(
         () => sock.sendMessage(dest, { text }),
         { dest, text, canal: NOM_CANAL }
       );
+      console.log(`[WHATSAPP] 🔄 Message mis en file Rate pour ${dest}`);
     } catch (queueErr) {
       console.error('[WHATSAPP] Rate indisponible:', queueErr.message);
-      throw err;
     }
+
+    // IMPORTANT : re-throw pour que handleReponsePrete NE logue PAS "✓ Message envoyé"
+    throw err;
   });
 }
 
 async function handleReponsePrete(payload) {
   try {
-    const { target, text, isGroup, groupId } = payload;
-    if (!sock || !target || !text) return;
+    const { target, text, isGroup, groupId, messageId } = payload;
+    if (!sock || !target || !text) {
+      console.warn(`[WHATSAPP] Envoi abandonné — sock=${!!sock} target=${!!target} text=${!!text}`);
+      return;
+    }
+
     const cible = (isGroup && groupId) ? groupId : target;
     const dest = cible.includes('@') ? cible : cible + '@s.whatsapp.net';
+
+    // Log détaillé pour debug groupes
+    console.log(`[WHATSAPP] Envoi → dest=${dest} isGroup=${!!isGroup} groupId=${groupId || 'N/A'} target=${target} msgId=${messageId || 'N/A'}`);
+
     await envoyerAvecTimeout(dest, text);
     console.log(`[WHATSAPP] ✓ Message envoyé à ${dest}`);
   } catch (err) {
-    console.error('[WHATSAPP] Erreur envoi :', err.message);
+    // L'erreur est déjà loggée dans envoyerAvecTimeout
+    console.error(`[WHATSAPP] Échec final envoi : ${err.message}`);
   }
 }
 
@@ -206,7 +237,6 @@ async function connect() {
   }
   isConnecting = true;
 
-  // PATCH : finally block garantit que isConnecting est toujours reset
   try {
     const watchdog = setTimeout(() => {
       if (isConnecting) {
@@ -273,7 +303,6 @@ async function connect() {
       return null;
     }
   } finally {
-    // PATCH : GARANTIR que isConnecting est toujours reset
     isConnecting = false;
   }
 }
@@ -282,7 +311,6 @@ function getSocket() {
   return sock;
 }
 
-// PATCH : vérifie si la socket est vivante
 function isSocketAlive() {
   return !!(sock && sock.user);
 }
