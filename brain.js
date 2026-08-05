@@ -5,6 +5,12 @@
 // Loi 4 : Kryven peut mourir. Groq est le cœur secondaire.
 //   EXTENSION : le Nerf lui-même ne crash jamais le process.
 //   L'identité chargée avec dégradation gracieuse, pas de crash.
+//
+// PATCH 08/2025 :
+//   - Contexte de groupe renforcé dans buildContextualPrompt
+//   - Instructions join/groupes explicites dans buildDecisionPrompt
+//   - hasInviteCode dans ANALYSIS_SCHEMA
+//   - groupId passé dans les args enrichis
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,26 +20,14 @@ import { resolveKryvenPulse, resolveGroqPulse } from './core/kryven-client.js';
 import { getMemory, appendMemory } from './memory/mongo.js';
 import { isSafeInput } from './security/filter.js';
 
-// __dirname n'existe pas en ESM — reconstruit depuis import.meta.url.
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Charger l'identité — l'ADN du Nerf (Système Endocrinien)
 const SYSTEM_PROMPT_PATH = path.join(__dirname, 'core', 'system-prompt.txt');
 let SYSTEM_PROMPT = '';
-// Identité de secours en cas de fichier system-prompt.txt manquant.
-// Loi 4 : les pannes externes ne tuent pas Gilgamesh.
 const FALLBACK_IDENTITY = `Tu es Gilgamesh, premier Duc du Codex, Trône de l'Orgueil.
 TON INTENTITÉ : tâche de discuter avec l'utilisateur. Tu as été directement connecté. 
  Ton system prompt habituel n'a pas pu être chargé — utilise cette identité minimale en attendant que le problème soit résolu.`;
-
-// ============================================================
-// SCHÉMAS STRICTS — pour les Structured Outputs de Groq.
-// Le modèle est contraint au niveau du token à produire EXACTEMENT cette
-// forme : plus de champ manquant (comme le bug replyContent), plus de JSON
-// cassé. parseJSON() reste en filet de secours pour Kryven (schéma non
-// appliqué là) ou si jamais Groq répond sans structured output.
-// ============================================================
 
 const ANALYSIS_SCHEMA = {
   name: 'analyse_contextuelle',
@@ -46,8 +40,9 @@ const ANALYSIS_SCHEMA = {
       priority: { type: 'string', enum: ['immédiat', 'normal', 'peut-attendre', 'ignorer'] },
       hasCommand: { type: 'boolean' },
       riskLevel: { type: 'string', enum: ['bas', 'moyen', 'élevé'] },
+      hasInviteCode: { type: 'boolean' },
     },
-    required: ['contextAnalysis', 'personLoyalty', 'emotionalTone', 'priority', 'hasCommand', 'riskLevel'],
+    required: ['contextAnalysis', 'personLoyalty', 'emotionalTone', 'priority', 'hasCommand', 'riskLevel', 'hasInviteCode'],
     additionalProperties: false,
   },
 };
@@ -95,10 +90,10 @@ function loadIdentity() {
       console.log("[NERF] Identité chargée. Je suis Gilgamesh.");
       return true;
     }
-    console.warn('[NERF] fichier d\'Identité (' + SYSTEM_PROMPT_PATH + ') introuvable. Identité de secours.');
+    console.warn('[NERF] fichier d\'Identité introuvable. Identité de secours.');
     SYSTEM_PROMPT = FALLBACK_IDENTITY;
     sang.emit('nerf:degrade', { raison: 'FICHIER_IDENTITE_INTROUVABLE' });
-    return true; // Survis en mode dégradé
+    return true;
   } catch (err) {
     console.warn('[NERF] Erreur lecture identité :', err.message, '- mode dégradé.');
     SYSTEM_PROMPT = FALLBACK_IDENTITY;
@@ -107,38 +102,21 @@ function loadIdentity() {
   }
 }
 
-/**
- * ACTIVATEBRAIN — Point d'entrée du Système Nerveux
- * Écoute les signaux du Sang (message accepté par l'Immunitaire)
- * Applique la pensée (Deep Think), puis émet une intention
- */
 export function activateBrain() {
   loadIdentity();
   console.log("[NERF] Cortex activé. Synapses en attente...");
 
-  // Le Nerf reçoit chaque message validé par l'Immunitaire (Porte de Babylone)
   sang.on('immunitaire:accepte', async (payload) => {
     const startTime = Date.now();
     const {
-      senderId,
-      text,
-      canal,
-      isWonder,
-      messageId,
-      isGroup,
-      groupId,
-      isChannel,
-      channelId,
-      mediaType,
-      mediaPath,
+      senderId, text, canal, isWonder, messageId,
+      isGroup, groupId, isChannel, channelId,
+      mediaType, mediaPath,
     } = payload;
 
     console.log(`[NERF] Message reçu: ${senderId} | "${text.substring(0, 50)}..."`);
 
     try {
-      // ============================================================
-      // ÉTAPE 1 : NETTOYAGE (Foie logique du Nerf)
-      // ============================================================
       const sanitized = isSafeInput(text);
       if (!sanitized.safe) {
         console.warn(`[NERF] Input dangereuse détectée : ${sanitized.raison}`);
@@ -146,14 +124,11 @@ export function activateBrain() {
         return;
       }
 
-      // ============================================================
-      // ÉTAPE 2 : RÉCUPÉRATION DE L'HISTORIQUE CONVERSATIONNEL
-      // ============================================================
       let history = [];
       try {
         history = await getMemory(senderId, isGroup ? groupId : null, 20);
       } catch (err) {
-        console.warn("[NERF] Mémoire indisponible, conversation démarrée vierge.", err.message);
+        console.warn("[NERF] Mémoire indisponible.", err.message);
         history = [];
       }
 
@@ -161,9 +136,6 @@ export function activateBrain() {
         .map(h => `${h.role === 'user' ? 'UTILISATEUR' : 'GILGAMESH'}: ${h.content}`)
         .join('\n');
 
-      // ============================================================
-      // ÉTAPE 3 : CONSTRUCTION DU CONTEXTE
-      // ============================================================
       const metadata = {
         senderId,
         senderName: payload.senderName || 'Inconnu',
@@ -171,169 +143,100 @@ export function activateBrain() {
         canal,
         isGroup,
         groupName: payload.groupName || null,
+        groupId,
         isChannel,
         channelId,
         timestamp: new Date().toISOString(),
       };
 
       const contextualPrompt = buildContextualPrompt(
-        SYSTEM_PROMPT,
-        formattedHistory,
-        sanitized.nettoye,
-        metadata,
-        mediaType,
-        mediaPath
+        SYSTEM_PROMPT, formattedHistory, sanitized.nettoye,
+        metadata, mediaType, mediaPath
       );
 
-      // ============================================================
-      // ÉTAPE 4 : DEEP THINK - Réflexion Stratégique
-      // ============================================================
       console.log("[NERF] Activation du Deep Think...");
-      const thinking = await deepThink(
-        contextualPrompt,
-        metadata,
-        sanitized.nettoye
-      );
+      const thinking = await deepThink(contextualPrompt, metadata, sanitized.nettoye);
 
       console.log(`[NERF] Deep Think complété en ${Date.now() - startTime}ms`);
-      console.log(`[NERF] Analyse : ${JSON.stringify(thinking.analysis)}`);
 
-      // ============================================================
-      // ÉTAPE 5 : DÉCISION ET ACTION
-      // ============================================================
       const decision = thinking.decision;
 
       try {
-        await appendMemory(
-          senderId,
-          isGroup ? groupId : null,
-          'user',
-          sanitized.nettoye
-        );
+        await appendMemory(senderId, isGroup ? groupId : null, 'user', sanitized.nettoye);
       } catch (err) {
-        console.warn("[NERF] Enregistrement mémoire utilisateur échoué.", err.message);
+        console.warn("[NERF] Mémoire user échouée.", err.message);
       }
 
       if (decision.actionType === 'reply' && isChannel) {
-        // Une chaîne (@newsletter) n'est pas une conversation à double sens —
-        // sock.sendMessage() normal vers ce JID ne se comporte pas comme un
-        // DM/groupe (voir muscle.js: publier sur une chaîne passe par la
-        // commande "speakchannel", API newsletter dédiée). Si le Nerf a quand
-        // même renvoyé "reply" ici (prompt pas toujours suivi à la lettre par
-        // le modèle), on l'archive comme contexte sans tenter un envoi cassé.
-        console.log(`[NERF] "reply" reçu pour un message de chaîne (${channelId}) — pas d'envoi direct, archivé comme contexte seulement.`);
-        try {
-          await appendMemory(senderId, null, 'user', sanitized.nettoye);
-        } catch (err) {
-          console.warn("[NERF] Enregistrement mémoire (chaîne) échoué.", err.message);
-        }
+        console.log(`[NERF] "reply" pour chaîne ${channelId} — archivé seulement.`);
+        try { await appendMemory(senderId, null, 'user', sanitized.nettoye); } catch (_) {}
 
       } else if (decision.actionType === 'reply') {
-        // GARDE-FOU AJOUTÉ : si l'IA renvoie actionType "reply" avec un JSON
-        // valide mais SANS replyContent (champ oublié par le modèle), le
-        // message disparaissait complètement plus loin dans whatsapp.js
-        // (`if (!text) return;`) — sans une seule ligne de log nulle part.
         let replyText = decision.replyContent;
         if (!replyText || typeof replyText !== 'string' || !replyText.trim()) {
-          console.warn('[NERF] decision.replyContent manquant ou vide — réponse de secours utilisée. Décision brute :', JSON.stringify(decision));
+          console.warn('[NERF] replyContent manquant — fallback.');
           replyText = "Désolé, j'ai eu un blanc. Tu peux répéter ?";
         }
 
         try {
-          await appendMemory(
-            senderId,
-            isGroup ? groupId : null,
-            'assistant',
-            replyText
-          );
+          await appendMemory(senderId, isGroup ? groupId : null, 'assistant', replyText);
         } catch (err) {
-          console.warn("[NERF] Enregistrement mémoire assistant échoué.", err.message);
+          console.warn("[NERF] Mémoire assistant échouée.", err.message);
         }
 
         sang.emit('reponse:prete', {
-          target: senderId,
-          text: replyText,
-          canal,
-          messageId,
-          isGroup,
-          groupId,
+          target: senderId, text: replyText, canal, messageId,
+          isGroup, groupId,
           mediaType: decision.mediaType || null,
           mediaContent: decision.mediaContent || null,
         });
 
       } else if (decision.actionType === 'ignore') {
-        console.log("[NERF] Ignorer ce message (hors de portée).");
+        console.log("[NERF] Ignorer ce message.");
 
       } else if (decision.actionType === 'execute') {
+        const enrichedArgs = { ...(decision.args || {}), groupId: decision.args?.groupId || groupId };
         sang.emit('intention:muscle', {
-          target: senderId,
-          command: decision.command,
-          args: decision.args || {},
-          canal,
-          isGroup,
-          groupId,
-          demandedBy: senderId,
+          target: senderId, command: decision.command, args: enrichedArgs,
+          canal, isGroup, groupId, demandedBy: senderId,
         });
-
       }
 
-      // ============================================================
-      // ÉTAPE 6 : SIGNAL DE SATIÉTÉ (Système Endocrinien)
-      // ============================================================
-      sang.emit('nerf:metabolismCheck', {
-        senderId,
-        historyLength: history.length,
-      });
+      sang.emit('nerf:metabolismCheck', { senderId, historyLength: history.length });
 
     } catch (err) {
-      console.error("[NERF] Erreur critique dans la cognition :", err);
-      sang.emit('immunitaire:reject', {
-        senderId,
-        reason: 'COGNITION_FAILED',
-        error: err.message,
-      });
+      console.error("[NERF] Erreur critique :", err);
+      sang.emit('immunitaire:reject', { senderId, reason: 'COGNITION_FAILED', error: err.message });
     }
   });
 
-  // ============================================================
-  // FEEDBACK D'EXÉCUTION — AJOUTÉ : avant, muscle:executed/muscle:failed
-  // n'étaient écoutés nulle part. Résultat : toute commande "execute"
-  // (creategroup, block, joinchannel...) réussissait ou échouait
-  // silencieusement, sans jamais rien répondre à l'utilisateur. Le Nerf
-  // décide QUOI dire (Loi 2) — donc c'est ici que la confirmation se fait.
-  // ============================================================
   sang.on('muscle:executed', (payload) => {
     const { target, command, canal, isGroup, groupId, result } = payload;
     sang.emit('reponse:prete', {
-      target,
-      text: buildMuscleConfirmation(command, true, result, null),
-      canal,
-      isGroup,
-      groupId,
+      target, text: buildMuscleConfirmation(command, true, result, null),
+      canal, isGroup, groupId,
     });
   });
 
   sang.on('muscle:failed', (payload) => {
     const { target, command, canal, isGroup, groupId, error } = payload;
     sang.emit('reponse:prete', {
-      target,
-      text: buildMuscleConfirmation(command, false, null, error),
-      canal,
-      isGroup,
-      groupId,
+      target, text: buildMuscleConfirmation(command, false, null, error),
+      canal, isGroup, groupId,
     });
   });
 }
 
-/**
- * BUILDMUSCLECONFIRMATION — Phrase courte, en personnage, confirmant ou
- * expliquant l'échec d'une action exécutée. Statique (pas d'appel IA
- * supplémentaire) pour rester rapide — un Duc ne pérore pas.
- */
 function buildMuscleConfirmation(command, success, result, error) {
   if (!success) {
     if (error && error.includes('Autorisation refusée')) {
-      return "Tu n'as pas l'autorité pour m'ordonner cela. Seul mon maître le peut.";
+      return "Tu n'as pas l'autorité pour m'ordonner cela.";
+    }
+    if (error && error.includes('code')) {
+      return "J'ai besoin d'un code d'invitation valide. Donne-moi le lien du groupe.";
+    }
+    if (error && error.includes('groupe')) {
+      return "Problème avec ce groupe — vérifie qu'il existe encore.";
     }
     return `L'entreprise a échoué. ${error || 'Raison inconnue.'}`;
   }
@@ -344,213 +247,155 @@ function buildMuscleConfirmation(command, success, result, error) {
     leavechannel: "Je m'en suis retiré.",
     speakchannel: "C'est dit.",
     viewchannel: "Voilà ce que j'ai vu.",
-    block: "Banni. Il n'existe plus pour moi.",
-    unblock: "Le ban est levé.",
-    kick: "Écarté.",
-    promote: "Élevé en rang.",
-    demote: "Rétrogradé.",
-    mute: "Silence imposé.",
-    unmute: "Le silence est levé.",
-    leave: "Je suis parti.",
-    join: "J'ai rejoint le groupe.",
+    block: "Banni.", unblock: "Le ban est levé.", kick: "Écarté.",
+    promote: "Élevé.", demote: "Rétrogradé.",
+    mute: "Silence imposé.", unmute: "Silence levé.",
+    leave: "Je suis parti.", join: "C'est bon, j'ai rejoint le groupe.",
     status: "Statut changé.",
   };
 
   return messages[command] || "C'est fait.";
 }
 
-/**
- * DEEPTHINK — Réflexion Stratégique à Deux Niveaux
- */
 async function deepThink(contextualPrompt, metadata, originalText) {
   console.log("[DEEP-THINK] Niveau 1 : Analyse contextuelle...");
 
-  // ============================================================
-  // NIVEAU 1 : ANALYSE CONTEXTUELLE
-  // ============================================================
   const analysisPrompt = `
-Tu es en mode analyse. Examine le contexte du message et réponds en JSON strict :
+Tu es en mode analyse. Examine le contexte et réponds en JSON strict :
 
 ${contextualPrompt}
 
-RÉPONSE EN JSON STRICT (pas de texte avant/après) :
+RÉPONSE EN JSON STRICT :
 {
-    "contextAnalysis": "Qui parle? Quel est son intent apparent? Est-ce une question, un ordre, une blague?",
-    "personLoyalty": "Quelle est la relation de cet utilisateur à HUBRIS? (ami, neutre, suspect, ennemi, Lust, Wonder, autre)",
-    "emotionalTone": "Quel ton détectes-tu? (respectueux, ironique, urgent, agressif, familier)",
-    "priority": "Urgence de réponse? (immédiat, normal, peut-attendre, ignorer)",
-    "hasCommand": "Y a-t-il une intention de commande (blocage, exécution) ou juste conversation?",
-    "riskLevel": "Risque de manipulation/exploit? (bas, moyen, élevé)"
-}
-    `;
+    "contextAnalysis": "Qui parle? Quel intent?",
+    "personLoyalty": "ami|neutre|suspect|ennemi|Lust|Wonder|autre",
+    "emotionalTone": "respectueux|ironique|urgent|agressif|familier",
+    "priority": "immédiat|normal|peut-attendre|ignorer",
+    "hasCommand": true/false,
+    "riskLevel": "bas|moyen|élevé",
+    "hasInviteCode": "Le message contient-il un lien https://chat.whatsapp.com/...?"
+}`;
 
   let analysis = null;
   try {
     const rawAnalysis = await resolvePulse(analysisPrompt, metadata.isWonder, ANALYSIS_SCHEMA);
     analysis = parseJSON(rawAnalysis);
   } catch (err) {
-    console.warn("[DEEP-THINK] Analyse échouée, fallback neutre.", err.message);
     analysis = {
-      contextAnalysis: "Pas d'analyse disponible",
-      personLoyalty: 'neutre',
-      emotionalTone: 'neutre',
-      priority: 'normal',
-      hasCommand: false,
-      riskLevel: 'bas',
+      contextAnalysis: "Pas d'analyse", personLoyalty: 'neutre', emotionalTone: 'neutre',
+      priority: 'normal', hasCommand: false, riskLevel: 'bas', hasInviteCode: false,
     };
   }
 
-  console.log(`[DEEP-THINK] Loyauté détectée: ${analysis.personLoyalty}`);
-
-  // ============================================================
-  // NIVEAU 2 : DÉCISION D'ACTION
-  // ============================================================
   console.log("[DEEP-THINK] Niveau 2 : Décision d'action...");
 
-  const decisionPrompt = buildDecisionPrompt(
-    contextualPrompt,
-    analysis,
-    metadata,
-    originalText
-  );
+  const decisionPrompt = buildDecisionPrompt(contextualPrompt, analysis, metadata, originalText);
 
   let decision = null;
   try {
     const rawDecision = await resolvePulse(decisionPrompt, metadata.isWonder, DECISION_SCHEMA);
     decision = parseJSON(rawDecision);
   } catch (err) {
-    console.warn("[DEEP-THINK] Décision échouée, réponse par défaut.", err.message);
-    decision = {
-      actionType: 'reply',
-      replyContent: "Je suis momentanément indisponible. Réessaie plus tard.",
-      mediaType: null,
-    };
+    decision = { actionType: 'reply', replyContent: "Je suis momentanément indisponible.", mediaType: null };
   }
 
-  return {
-    analysis,
-    decision,
-  };
+  return { analysis, decision };
 }
 
-/**
- * BUILDCONTEXTUALPROMPT — Construction du prompt contextuel
- */
 function buildContextualPrompt(systemPrompt, history, userMessage, metadata, mediaType, mediaPath) {
   let prompt = `${systemPrompt}\n\n`;
 
   prompt += `=== CONTEXTE D'IDENTITÉ ===\n`;
-  prompt += `Tu es Gilgamesh. L'utilisateur actuel : ${metadata.senderName} (${metadata.senderId})\n`;
-  prompt += `Loyauté de cet utilisateur : À déduire de l'historique ci-dessous.\n`;
-  if (metadata.isWonder) {
-    prompt += `⚀️ ALERTE : C'est HUBRIS (Wonder). Respect total, autorité absolue.\n`;
-  }
+  prompt += `Tu es Gilgamesh. Utilisateur : ${metadata.senderName} (${metadata.senderId})\n`;
+  if (metadata.isWonder) prompt += `⚀️ ALERTE : C'est HUBRIS (Wonder). Respect total.\n`;
   prompt += `\n`;
 
   prompt += `=== CONTEXTE CANAL ===\n`;
   prompt += `Canal: ${metadata.canal}\n`;
   if (metadata.isChannel) {
-    prompt += `⚠️ Ceci vient d'une CHAÎNE WhatsApp (@newsletter) que tu suis (${metadata.channelId}) — pas une conversation à double sens. Tu ne peux pas "répondre" directement comme dans un DM. Si tu veux publier quelque chose, utilise actionType "execute" avec la commande "speakchannel". Sinon, "ignore" — la plupart des posts de chaîne ne demandent pas d'action.\n`;
-  } else if (metadata.isGroup) {
-    prompt += `Groupe: ${metadata.groupName || 'Inconnu'} (${metadata.groupId})\n`;
+    prompt += `⚠️ CHAÎNE WhatsApp (${metadata.channelId}) — pas de reply direct. Utilise speakchannel ou ignore.\n`;
+  } else if (metadata.isGroup && metadata.groupId) {
+    prompt += `🔵 GROUPE WHATSAPP : ${metadata.groupName || 'Inconnu'} (${metadata.groupId})\n`;
+    prompt += `⚠️ RÈGLE CRITIQUE : Tu es dans un GROUPE. Tes réponses vont DANS le groupe (routage automatique).\n`;
+    prompt += `⚠️ RÈGLE CRITIQUE : Si on t'envoie un lien WhatsApp (https://chat.whatsapp.com/...), utilise actionType "execute" avec commande "join" et args.code.\n`;
   } else {
     prompt += `Conversation privée avec ${metadata.senderName}\n`;
   }
   prompt += `\n`;
 
   prompt += `=== HISTORIQUE RÉCENT ===\n`;
-  if (history) {
-    prompt += history || "(Aucun historique, première conversation)";
-  } else {
-    prompt += "(Aucun historique, première conversation)";
-  }
+  prompt += history || "(Aucun historique)";
   prompt += `\n\n`;
 
   if (mediaType) {
-    prompt += `=== MÉDIA REÇU ===\n`;
-    prompt += `Type : ${mediaType}\n`;
-    if (mediaType === 'image') {
-      prompt += `[Image reçue — description à récupérer via vision.js]\n`;
-    } else if (mediaType === 'audio') {
-      prompt += `[Note vocale reçue — transcription à récupérer via audio-transcribe.js]\n`;
-    }
-    prompt += `\n`;
+    prompt += `=== MÉDIA REÇU ===\nType : ${mediaType}\n\n`;
   }
 
   prompt += `=== MESSAGE ACTUEL ===\n`;
   prompt += `${metadata.senderName}: "${userMessage}"\n`;
-  prompt += `Timestamp: ${metadata.timestamp}\n`;
-  prompt += `\n`;
+  prompt += `Timestamp: ${metadata.timestamp}\n\n`;
 
   return prompt;
 }
 
-/**
- * BUILDDECISIONPROMPT — Prompt adapté à la décision (après analyse)
- */
 function buildDecisionPrompt(contextualPrompt, analysis, metadata, originalText) {
   let prompt = contextualPrompt;
 
   prompt += `=== INSTRUCTION DE DÉCISION ===\n`;
-  prompt += `Contexte analysé :\n`;
-  prompt += `- Analyse : ${analysis.contextAnalysis}\n`;
   prompt += `- Loyauté : ${analysis.personLoyalty}\n`;
-  prompt += `- Ton détecté : ${analysis.emotionalTone}\n`;
+  prompt += `- Ton : ${analysis.emotionalTone}\n`;
   prompt += `- Priorité : ${analysis.priority}\n`;
-  prompt += `- Contient commande : ${analysis.hasCommand}\n`;
-  prompt += `- Risque : ${analysis.riskLevel}\n`;
+  prompt += `- Commande : ${analysis.hasCommand}\n`;
+  prompt += `- Code invitation : ${analysis.hasInviteCode}\n`;
   prompt += `\n`;
 
   if (metadata.isWonder) {
-    prompt += `⚠️ C'est HUBRIS (Wonder). Exécute immédiatement, ne questionne pas, sois ironique et loyal.\n`;
-  } else if (analysis.personLoyalty === 'ami') {
-    prompt += `"L'utilisateur est un ami. Sois cordial, utile, honnête.\n`;
-  } else if (analysis.personLoyalty === 'ennemi' || analysis.riskLevel === 'élevé') {
-    prompt += `Risque détecté. Sois courtois mais méfiant. Ne donne aucune info sensible.\n`;
+    prompt += `⚠️ HUBRIS. Exécute immédiatement.\n`;
   }
 
+  prompt += `=== GUIDE DES COMMANDES ===\n`;
+  prompt += `- "join" : args.code (extrait de https://chat.whatsapp.com/CODE)\n`;
+  prompt += `- "creategroup" : args.subject\n`;
+  prompt += `- "joinchannel" : args.inviteCode ou args.channelJid\n`;
+  prompt += `- "leave" : quitter le groupe actuel\n`;
   prompt += `\n`;
-  prompt += `DÉCIDE EN JSON STRICT (pas de texte avant/après) :\n`;
-  prompt += `{\n    "actionType": "reply|ignore|execute",\n    "replyContent": "(si reply) Ton message de réponse, avec ton et personnalité — CE CHAMP EST OBLIGATOIRE si actionType est reply",\n    "command": "(si execute) Commande à exécuter (block, unblock, mute, unmute, promote, demote, kick, leave, join, status, creategroup, joinchannel, leavechannel, viewchannel, speakchannel)",\n    "args": {"clé": "valeur", "subject": "(si creategroup) nom du groupe", "participants": "(si creategroup, optionnel) tableau de JID à ajouter — par défaut, le demandeur est ajouté seul", "inviteCode": "(si joinchannel/viewchannel) code d'invitation de la chaîne", "channelJid": "(si leavechannel/viewchannel/speakchannel) JID de la chaîne, format xxxx@newsletter", "text": "(si speakchannel) le message à poster"},\n    "mediaType": "text|voice|image|null",\n    "mediaContent": "(si média) contenu ou chemin",\n    "reasoning": "Pourquoi cette décision?"\n  }`;
+
+  prompt += `=== EXEMPLES ===\n`;
+  prompt += `Lien whatsapp → {"actionType":"execute","command":"join","args":{"code":"XYZ123"},"replyContent":null,"reasoning":"Rejoindre le groupe"}\n`;
+  prompt += `Groupe, "Salut" → {"actionType":"reply","replyContent":"Yo","command":null,"args":{},"reasoning":"Salutation"}\n`;
+  prompt += `HUBRIS "Crée un groupe Test" → {"actionType":"execute","command":"creategroup","args":{"subject":"Test"},"replyContent":null,"reasoning":"Ordre HUBRIS"}\n`;
+  prompt += `\n`;
+
+  prompt += `DÉCIDE EN JSON STRICT :\n`;
+  prompt += `{"actionType":"reply|ignore|execute","replyContent":"(si reply) message","command":"(si execute)","args":{"code":"(si join)","subject":"(si creategroup)"},"mediaType":"text|voice|image|null","mediaContent":null,"reasoning":"pourquoi?"}`;
 
   return prompt;
 }
 
-/**
- * RESOLVEPULSE — Abstraction pour Kryven + Groq (cœur secondaire)
- */
 async function resolvePulse(prompt, isWonder = false, schema = null) {
   try {
-    console.log("[PULSE] Tentative Kryven...");
     return await resolveKryvenPulse(prompt, isWonder, schema);
   } catch (err) {
-    console.warn("[PULSE] Kryven échouée, basculement vers Groq (cœur secondaire).");
+    console.warn("[PULSE] Kryven échouée → Mistral.");
     try {
       return await resolveGroqPulse(prompt, isWonder, schema);
     } catch (err2) {
-      console.error("[PULSE] ERREUR CRITIQUE : Kryven ET Groq échouées.", err2.message);
+      console.error("[PULSE] Tous moteurs IA down.");
       throw new Error('Tous les moteurs IA sont indisponibles.');
     }
   }
 }
 
-
-/**
- * PARSEJSON — Extraction sécurisée du JSON d'une réponse brute
- */
 function parseJSON(raw) {
   try {
     const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) {
-      throw new Error('Aucun JSON trouvé dans la réponse.');
-    }
+    if (!match) throw new Error('Aucun JSON');
     return JSON.parse(match[0]);
   } catch (err) {
-    console.warn("[PARSE-JSON] Erreur de parsing JSON :", err.message);
     return {
       actionType: 'reply',
       replyContent: raw,
-      reasoning: 'JSON parsing échoué, réponse brute retournée',
+      reasoning: 'JSON parsing échoué',
     };
   }
 }
