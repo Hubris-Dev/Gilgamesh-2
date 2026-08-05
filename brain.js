@@ -256,6 +256,7 @@ export function activateBrain() {
           canal,
           messageId,
           isGroup,
+          groupId,
           mediaType: decision.mediaType || null,
           mediaContent: decision.mediaContent || null,
         });
@@ -270,6 +271,7 @@ export function activateBrain() {
           args: decision.args || {},
           canal,
           isGroup,
+          groupId,
           demandedBy: senderId,
         });
 
@@ -301,22 +303,24 @@ export function activateBrain() {
   // décide QUOI dire (Loi 2) — donc c'est ici que la confirmation se fait.
   // ============================================================
   sang.on('muscle:executed', (payload) => {
-    const { target, command, canal, isGroup, result } = payload;
+    const { target, command, canal, isGroup, groupId, result } = payload;
     sang.emit('reponse:prete', {
       target,
       text: buildMuscleConfirmation(command, true, result, null),
       canal,
       isGroup,
+      groupId,
     });
   });
 
   sang.on('muscle:failed', (payload) => {
-    const { target, command, canal, isGroup, error } = payload;
+    const { target, command, canal, isGroup, groupId, error } = payload;
     sang.emit('reponse:prete', {
       target,
       text: buildMuscleConfirmation(command, false, null, error),
       canal,
       isGroup,
+      groupId,
     });
   });
 }
