@@ -11,7 +11,7 @@ import { isWonder } from './security/recognition.js';
 export function activateMuscle() {
     console.log('[MUSCLE] Fibres activées. En attente d intentions...');
     sang.on('intention:muscle', async (payload) => {
-        const { target, command, args = {}, canal, isGroup, demandedBy } = payload;
+        const { target, command, args = {}, canal, isGroup, groupId, demandedBy } = payload;
         console.log(`[MUSCLE] Intention reçue: ${command} → ${target}`);
         // "creategroup" ajouté : réservée à HUBRIS, comme les autres actions
         // qui modifient la messagerie elle-même plutôt que juste répondre.
@@ -20,16 +20,16 @@ export function activateMuscle() {
         const commandesSensibles = ['block', 'unblock', 'kick', 'promote', 'demote', 'leave', 'creategroup', 'joinchannel', 'leavechannel'];
         if (commandesSensibles.includes(command.toLowerCase()) && !isWonder(demandedBy)) {
             console.warn(`[MUSCLE] Commande "${command}" refusée — ${target} n'est pas HUBRIS.`);
-            sang.emit('muscle:failed', { target, command, canal, isGroup, success: false, error: 'Autorisation refusée : commande réservée à HUBRIS.' });
+            sang.emit('muscle:failed', { target, command, canal, isGroup, groupId, success: false, error: 'Autorisation refusée : commande réservée à HUBRIS.' });
             return;
         }
         try {
             const result = await executeCommand(command, target, args, canal);
-            sang.emit('muscle:executed', { target, command, canal, isGroup, success: true, result });
+            sang.emit('muscle:executed', { target, command, canal, isGroup, groupId, success: true, result });
             console.log(`[MUSCLE] ${command} exécuté avec succès.`);
         } catch (err) {
             console.error(`[MUSCLE] Erreur lors de l'exécution ${command}:`, err.message);
-            sang.emit('muscle:failed', { target, command, canal, isGroup, success: false, error: err.message });
+            sang.emit('muscle:failed', { target, command, canal, isGroup, groupId, success: false, error: err.message });
         }
     });
 }
