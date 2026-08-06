@@ -17,7 +17,7 @@ function extraireTexte(message = {}) {
   );
 }
 
-export function parseMessageBrute(msgBrut) {
+export function parseMessageBrute(msgBrut, resoudreCanonique = (jid) => jid) {
   if (!msgBrut?.key || !msgBrut?.message) return null;
 
   // Les messages envoyés par Gilgamesh lui-même ne doivent jamais revenir dans le corps.
@@ -27,8 +27,14 @@ export function parseMessageBrute(msgBrut) {
   const isGroup = remoteJid.endsWith('@g.us');
   const isChannel = remoteJid.endsWith('@newsletter');
 
+  // FIX LID : en groupe c'est `participant`, en DM `remoteJid` — dans les
+  // deux cas WhatsApp peut adresser par LID (@lid) plutôt que par JID
+  // téléphone. resoudreCanonique (fourni par channels/whatsapp.js) ramène
+  // au format attendu par isWonder() et par les clés mémoire.
+  const senderBrut = isGroup ? (msgBrut.key.participant || '') : remoteJid;
+
   return {
-    sender: isGroup ? (msgBrut.key.participant || '') : remoteJid,
+    sender: resoudreCanonique(senderBrut),
     messageId: msgBrut.key.id || '',
     text: extraireTexte(msgBrut.message),
     timestamp: msgBrut.messageTimestamp || null,
