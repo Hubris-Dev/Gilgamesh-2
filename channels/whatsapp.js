@@ -34,6 +34,24 @@ let sock = null;
 let tentatives = 0;
 let isConnecting = false;
 
+// ─── FIX LID/PN ───
+// WhatsApp adresse certains contacts (surtout en groupe) par LID (@lid) au
+// lieu du JID téléphone (@s.whatsapp.net). isWonder() (security/recognition.js)
+// compare senderId à ADMIN_IDS en format canonique : sans résolution, un
+// message de HUBRIS adressé par LID n'est jamais reconnu comme Wonder —
+// symptôme : le bot "ne voit pas" HUBRIS/les commandes dans les groupes.
+// resoudreJid() centralise l'appel à lidResolver (déjà câblé plus bas pour
+// les envois via wrapWithSessionStability) pour l'appliquer aussi en réception.
+function resoudreJid(jid) {
+  if (!jid) return jid;
+  try {
+    return lidResolver.resolveCanonical(jid) || jid;
+  } catch (err) {
+    console.warn('[WHATSAPP] resoudreJid a échoué pour', jid, ':', err.message);
+    return jid;
+  }
+}
+
 // ─── Injection de Session Base64 ───
 
 async function ingestBase64Session() {
@@ -123,15 +141,16 @@ function handleConnectionUpdate(update) {
 function handleMessagesUpsert({ messages, type }) {
   console.log(`[WHATSAPP] messages.upsert reçu — type: ${type}, count: ${messages?.length || 0}`);
   for (const msgBrut of messages) {
-    const propre = parseMessageBrute(msgBrut);
+    const propre = parseMessageBrute(msgBrut, resoudreJid);
     if (!propre) continue;
     if (!propre.text) continue;
 
     const remoteJid = msgBrut.key.remoteJid || '';
     const isGroup = remoteJid.endsWith('@g.us');
     const isChannel = remoteJid.endsWith('@newsletter');
+    const senderBrut = isGroup ? (msgBrut.key.participant || '') : remoteJid;
 
-    console.log(`[WHATSAPP] remoteJid: ${remoteJid}, isGroup: ${isGroup}, groupId: ${isGroup ? remoteJid : null}`);
+    console.log(`[WHATSAPP] remoteJid: ${remoteJid}, isGroup: ${isGroup}, groupId: ${isGroup ? remoteJid : null}, sender brut→résolu: ${senderBrut} → ${propre.sender}`);
 
     sang.emit('canal:message:recu', {
       senderId: propre.sender,
@@ -284,6 +303,15 @@ async function connect() {
       sock.ev.on('creds.update', saveCreds);
       sock.ev.on('connection.update', handleConnectionUpdate);
       sock.ev.on('messages.upsert', handleMessagesUpsert);
+
+      // Best-effort : Baileys peut émettre les correspondances LID↔PN qu'il
+      // découvre. Fiabilité variable selon la version (voir Baileys#2263 —
+      // parfois cet évènement ne se déclenche jamais) : ça ne remplace pas
+      // le vrai fix (upgrade Baileys ≥6.8 pour le champ Alt sur MessageKey),
+      // mais ça coûte rien et aide resoudreJid() quand ça marche.
+      sock.ev.on('lid-mapping.update', ({ lid, pn } = {}) => {
+        if (lid && pn) lidResolver.learn({ lid, pn });
+      });
 
       setupListeners();
       clearTimeout(watchdog);
