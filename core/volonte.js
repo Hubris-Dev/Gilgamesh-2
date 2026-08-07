@@ -47,6 +47,7 @@ export async function execute() {
     }
   } catch (err) {
     console.warn('[VOLONTÉ] Erreur:', err.message);
+    sang.emit('volonte:erreur', { niveau: 'warn', detail: err.message });
   }
 }
 
@@ -76,6 +77,8 @@ async function decideProactiveAction() {
     const match = raw.match(/\{[\s\S]*\}/);
     return match ? JSON.parse(match[0]) : { actionType: 'ignore' };
   } catch (err) {
+    console.warn('[VOLONTÉ] decideProactiveAction échouée :', err.message);
+    sang.emit('volonte:erreur', { niveau: 'warn', raison: 'decision_echouee', detail: err.message });
     return { actionType: 'ignore' };
   }
 }
@@ -111,6 +114,8 @@ async function getRecentContacts() {
       groupId: r.groupId,
     }));
   } catch (err) {
+    console.warn('[VOLONTÉ] getRecentContacts échouée :', err.message);
+    sang.emit('volonte:erreur', { niveau: 'warn', raison: 'contacts_recents_echoue', detail: err.message });
     return [];
   }
 }
