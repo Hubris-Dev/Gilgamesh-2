@@ -402,10 +402,12 @@ async function resolvePulse(prompt, isWonder = false, schema = null) {
     return await resolveKryvenPulse(prompt, isWonder, schema);
   } catch (err) {
     console.warn("[PULSE] Kryven échouée → Mistral.");
+    sang.emit('cortex:moteur-echoue', { moteur: 'kryven', detail: err.message });
     try {
       return await resolveGroqPulse(prompt, isWonder, schema);
     } catch (err2) {
       console.error("[PULSE] Tous moteurs IA down.");
+      sang.emit('cortex:auto-quit', { raison: 'tous_moteurs_indisponibles', kryven: err.message, secondaire: err2.message });
       throw new Error('Tous les moteurs IA sont indisponibles.');
     }
   }
