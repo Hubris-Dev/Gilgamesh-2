@@ -63,6 +63,7 @@ export function start() {
         }
       } catch (err) {
         canaux['whatsapp'] = 'erreur vérification: ' + err.message;
+        sang.emit('pouls:canal-erreur', { canal: 'whatsapp', detail: err.message });
       }
     }
 
