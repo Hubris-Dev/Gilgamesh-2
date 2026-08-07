@@ -206,7 +206,15 @@ export function activateBrain() {
         console.log("[NERF] Ignorer ce message.");
 
       } else if (decision.actionType === 'execute') {
-        const enrichedArgs = { ...(decision.args || {}), groupId: decision.args?.groupId || groupId };
+        // FIX 08/07 : channelJid était JAMAIS auto-injecté (contrairement à
+        // groupId juste en dessous) — speakchannel échouait silencieusement
+        // dès que le LLM ne recopiait pas l'ID exact de la chaîne, ce qui
+        // ressemblait à "Gilgamesh confond group et channel".
+        const enrichedArgs = {
+          ...(decision.args || {}),
+          groupId: decision.args?.groupId || groupId,
+          channelJid: decision.args?.channelJid || channelId,
+        };
         sang.emit('intention:muscle', {
           target: senderId, command: decision.command, args: enrichedArgs,
           canal, isGroup, groupId, demandedBy: senderId,
@@ -324,11 +332,12 @@ function buildContextualPrompt(systemPrompt, history, userMessage, metadata, med
   prompt += `=== CONTEXTE CANAL ===\n`;
   prompt += `Canal: ${metadata.canal}\n`;
   if (metadata.isChannel) {
-    prompt += `⚠️ CHAÎNE WhatsApp (${metadata.channelId}) — pas de reply direct. Utilise speakchannel ou ignore.\n`;
+    prompt += `📡 CHAÎNE WhatsApp (${metadata.channelId}) — PAS un groupe.\n`;
+    prompt += `⚠️ RÈGLE CRITIQUE : Ici, jamais de "reply" direct. Pour parler, actionType "execute" + commande "speakchannel" + args.text. Tu n'as PAS besoin de fournir args.channelJid — le système l'ajoute automatiquement pour CETTE chaîne. Sinon, ignore.\n`;
   } else if (metadata.isGroup && metadata.groupId) {
     prompt += `🔵 GROUPE WHATSAPP : ${metadata.groupName || 'Inconnu'} (${metadata.groupId})\n`;
-    prompt += `⚠️ RÈGLE CRITIQUE : Tu es dans un GROUPE. Tes réponses vont DANS le groupe (routage automatique).\n`;
-    prompt += `⚠️ RÈGLE CRITIQUE : Si on t'envoie un lien WhatsApp (https://chat.whatsapp.com/...), utilise actionType "execute" avec commande "join" et args.code.\n`;
+    prompt += `⚠️ RÈGLE CRITIQUE : Tu es dans un GROUPE, pas une chaîne. Tes réponses vont DANS le groupe via un "reply" normal (routage automatique) — JAMAIS via speakchannel, réservé aux chaînes (@newsletter).\n`;
+    prompt += `⚠️ RÈGLE CRITIQUE : Si on t'envoie un lien de GROUPE (https://chat.whatsapp.com/CODE), utilise actionType "execute" avec commande "join" et args.code.\n`;
   } else {
     prompt += `Conversation privée avec ${metadata.senderName}\n`;
   }
@@ -365,15 +374,19 @@ function buildDecisionPrompt(contextualPrompt, analysis, metadata, originalText)
   }
 
   prompt += `=== GUIDE DES COMMANDES ===\n`;
-  prompt += `- "join" : args.code (extrait de https://chat.whatsapp.com/CODE)\n`;
+  prompt += `- "join" : args.code — lien de GROUPE, format https://chat.whatsapp.com/CODE\n`;
   prompt += `- "creategroup" : args.subject\n`;
-  prompt += `- "joinchannel" : args.inviteCode ou args.channelJid\n`;
+  prompt += `- "joinchannel" : args.inviteCode — lien de CHAÎNE, format https://whatsapp.com/channel/CODE (PAS chat.whatsapp.com)\n`;
+  prompt += `- "speakchannel" : args.text seulement — PAS besoin d'args.channelJid, auto-rempli par le système\n`;
   prompt += `- "leave" : quitter le groupe actuel\n`;
+  prompt += `- NE JAMAIS confondre : chat.whatsapp.com/* = GROUPE (join) · whatsapp.com/channel/* = CHAÎNE (joinchannel) · speakchannel = parler dans une chaîne, jamais dans un groupe\n`;
   prompt += `\n`;
 
   prompt += `=== EXEMPLES ===\n`;
-  prompt += `Lien whatsapp → {"actionType":"execute","command":"join","args":{"code":"XYZ123"},"reasoning":"Rejoindre le groupe"}\n`;
+  prompt += `Lien groupe (chat.whatsapp.com) → {"actionType":"execute","command":"join","args":{"code":"XYZ123"},"reasoning":"Rejoindre le groupe"}\n`;
+  prompt += `Lien chaîne (whatsapp.com/channel) → {"actionType":"execute","command":"joinchannel","args":{"inviteCode":"XYZ123"},"reasoning":"Rejoindre la chaîne"}\n`;
   prompt += `Groupe, "Salut" → {"actionType":"reply","replyContent":"Yo","reasoning":"Salutation"}\n`;
+  prompt += `Chaîne, HUBRIS veut poster → {"actionType":"execute","command":"speakchannel","args":{"text":"le message"},"reasoning":"Poster dans la chaîne"}\n`;
   prompt += `HUBRIS "Crée un groupe Test" → {"actionType":"execute","command":"creategroup","args":{"subject":"Test"},"reasoning":"Ordre HUBRIS"}\n`;
   prompt += `\n`;
 
