@@ -89,6 +89,7 @@ async function joinGroup(sock, inviteCode) {
             console.log(`[MUSCLE] Métadonnées du groupe ${groupId} synchronisées.`);
         } catch (metaErr) {
             console.warn(`[MUSCLE] Synchro metadata échouée pour ${groupId}: ${metaErr.message} — l'envoi pourrait échouer.`);
+            sang.emit('muscle:erreur', { niveau: 'warn', raison: 'sync_metadata_groupe_echouee', groupId, detail: metaErr.message });
         }
     }
     
