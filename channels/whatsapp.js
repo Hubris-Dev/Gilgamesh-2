@@ -41,6 +41,7 @@ function resoudreJid(jid) {
     return lidResolver.resolveCanonical(jid) || jid;
   } catch (err) {
     console.warn('[WHATSAPP] resoudreJid a échoué pour', jid, ':', err.message);
+    sang.emit('whatsapp:erreur', { niveau: 'warn', raison: 'lid_resolution_echouee', jid, detail: err.message });
     return jid;
   }
 }
@@ -62,6 +63,7 @@ async function ingestBase64Session() {
   const base64Session = process.env.SESSION_BASE64;
   if (!base64Session) {
     console.error('[FATAL] SESSION_BASE64 manquante.');
+    sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'SESSION_BASE64_manquante' });
     process.exit(1);
   }
 
@@ -81,6 +83,7 @@ async function ingestBase64Session() {
     console.log('[WHATSAPP] Session ingérée.');
   } catch (err) {
     console.error('[FATAL] SESSION_BASE64 invalide :', err.message);
+    sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'SESSION_BASE64_invalide', detail: err.message });
     process.exit(1);
   }
 }
@@ -106,6 +109,7 @@ function handleConnectionUpdate(update) {
 
     if (dejaDeconnecte) {
       console.error('[FATAL] Session révoquée.');
+      sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'session_revoquee' });
       if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
       process.exit(1);
     }
@@ -113,6 +117,7 @@ function handleConnectionUpdate(update) {
     tentatives += 1;
     if (tentatives > MAX_TENTATIVES_RECONNEXION) {
       console.error('[WHATSAPP] ' + MAX_TENTATIVES_RECONNEXION + ' échecs — arrêt critique.');
+      sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'max_tentatives_reconnexion', tentatives });
       process.exit(1);
     }
     console.warn('[WHATSAPP] Connexion perdue — tentative ' + tentatives + '/' + MAX_TENTATIVES_RECONNEXION);
@@ -303,7 +308,11 @@ async function connect() {
       console.error('[WHATSAPP] Echec connexion :', err.message);
       sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: err.message });
       tentatives += 1;
-      if (tentatives > MAX_TENTATIVES_RECONNEXION) { console.error('[WHATSAPP] Arrêt critique.'); process.exit(1); }
+      if (tentatives > MAX_TENTATIVES_RECONNEXION) {
+        console.error('[WHATSAPP] Arrêt critique.');
+        sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'echec_connexion_repete', tentatives, detail: err.message });
+        process.exit(1);
+      }
       setTimeout(connect, 5000);
       return null;
     }
