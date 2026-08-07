@@ -30,6 +30,21 @@ let sock = null;
 let tentatives = 0;
 let isConnecting = false;
 
+// ─── FIX LID/PN (restauré 08/07 — avait disparu dans le refactor "refresh groupMetadata") ───
+// WhatsApp adresse certains contacts (surtout en groupe) par LID (@lid) au
+// lieu du JID téléphone (@s.whatsapp.net). isWonder() (security/recognition.js)
+// compare senderId à ADMIN_IDS en format canonique : sans résolution, un
+// message de HUBRIS adressé par LID n'est jamais reconnu comme Wonder.
+function resoudreJid(jid) {
+  if (!jid) return jid;
+  try {
+    return lidResolver.resolveCanonical(jid) || jid;
+  } catch (err) {
+    console.warn('[WHATSAPP] resoudreJid a échoué pour', jid, ':', err.message);
+    return jid;
+  }
+}
+
 // Cache simple pour éviter de refresh les métadonnées à chaque message
 const _groupMetaCache = new Map();
 const GROUP_META_CACHE_MS = 5 * 60 * 1000; // 5 minutes
@@ -107,7 +122,7 @@ function handleConnectionUpdate(update) {
 
 function handleMessagesUpsert({ messages, type }) {
   for (const msgBrut of messages) {
-    const propre = parseMessageBrute(msgBrut);
+    const propre = parseMessageBrute(msgBrut, resoudreJid);
     if (!propre || !propre.text) continue;
 
     const remoteJid = msgBrut.key.remoteJid || '';
@@ -273,6 +288,12 @@ async function connect() {
       sock.ev.on('creds.update', saveCreds);
       sock.ev.on('connection.update', handleConnectionUpdate);
       sock.ev.on('messages.upsert', handleMessagesUpsert);
+
+      // Best-effort : apprentissage des correspondances LID↔PN quand Baileys
+      // les expose (fiabilité variable — voir Baileys#2263).
+      sock.ev.on('lid-mapping.update', ({ lid, pn } = {}) => {
+        if (lid && pn) lidResolver.learn({ lid, pn });
+      });
 
       setupListeners();
       clearTimeout(watchdog);
