@@ -10,7 +10,8 @@
 //   - Contexte de groupe renforcé dans buildContextualPrompt
 //   - Instructions join/groupes explicites dans buildDecisionPrompt
 //   - hasInviteCode dans ANALYSIS_SCHEMA
-//   - groupId passé dans les args enrichis
+//   - FIX 08/07 : DECISION_SCHEMA — args assoupli (required=false),
+//     le LLM n'a plus à remplir des nulls pour reply/ignore
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,6 +29,10 @@ let SYSTEM_PROMPT = '';
 const FALLBACK_IDENTITY = `Tu es Gilgamesh, premier Duc du Codex, Trône de l'Orgueil.
 TON INTENTITÉ : tâche de discuter avec l'utilisateur. Tu as été directement connecté. 
  Ton system prompt habituel n'a pas pu être chargé — utilise cette identité minimale en attendant que le problème soit résolu.`;
+
+// ============================================================
+// SCHÉMAS STRICTS — pour les Structured Outputs de Mistral.
+// ============================================================
 
 const ANALYSIS_SCHEMA = {
   name: 'analyse_contextuelle',
@@ -47,6 +52,11 @@ const ANALYSIS_SCHEMA = {
   },
 };
 
+// FIX 08/07 : args n'est PLUS required. Pour reply/ignore, le LLM peut omettre args
+// complètement ou le passer vide. Seul execute a besoin d'args précis.
+// replyContent n'est required que si actionType === "reply".
+// command et args ne sont required que si actionType === "execute".
+// On garde additionalProperties: false MAIS on enlève la contrainte required.
 const DECISION_SCHEMA = {
   name: 'decision_action',
   schema: {
@@ -71,14 +81,15 @@ const DECISION_SCHEMA = {
           duration: { type: ['number', 'null'] },
           code: { type: ['string', 'null'] },
         },
-        required: ['subject', 'participants', 'inviteCode', 'channelJid', 'text', 'groupId', 'duration', 'code'],
+        // FIX : plus de required sur les sous-champs — le LLM met ce dont il a besoin
         additionalProperties: false,
       },
       mediaType: { type: ['string', 'null'], enum: ['text', 'voice', 'image', null] },
       mediaContent: { type: ['string', 'null'] },
-      reasoning: { type: ['string', 'null'] },
+      reasoning: { type: 'string' },
     },
-    required: ['actionType', 'replyContent', 'command', 'args', 'mediaType', 'mediaContent', 'reasoning'],
+    // FIX : seuls actionType et reasoning sont vraiment obligatoires
+    required: ['actionType', 'reasoning'],
     additionalProperties: false,
   },
 };
@@ -296,7 +307,7 @@ RÉPONSE EN JSON STRICT :
     const rawDecision = await resolvePulse(decisionPrompt, metadata.isWonder, DECISION_SCHEMA);
     decision = parseJSON(rawDecision);
   } catch (err) {
-    decision = { actionType: 'reply', replyContent: "Je suis momentanément indisponible.", mediaType: null };
+    decision = { actionType: 'reply', replyContent: "Je suis momentanément indisponible.", reasoning: 'fallback' };
   }
 
   return { analysis, decision };
@@ -361,13 +372,14 @@ function buildDecisionPrompt(contextualPrompt, analysis, metadata, originalText)
   prompt += `\n`;
 
   prompt += `=== EXEMPLES ===\n`;
-  prompt += `Lien whatsapp → {"actionType":"execute","command":"join","args":{"code":"XYZ123"},"replyContent":null,"reasoning":"Rejoindre le groupe"}\n`;
-  prompt += `Groupe, "Salut" → {"actionType":"reply","replyContent":"Yo","command":null,"args":{},"reasoning":"Salutation"}\n`;
-  prompt += `HUBRIS "Crée un groupe Test" → {"actionType":"execute","command":"creategroup","args":{"subject":"Test"},"replyContent":null,"reasoning":"Ordre HUBRIS"}\n`;
+  prompt += `Lien whatsapp → {"actionType":"execute","command":"join","args":{"code":"XYZ123"},"reasoning":"Rejoindre le groupe"}\n`;
+  prompt += `Groupe, "Salut" → {"actionType":"reply","replyContent":"Yo","reasoning":"Salutation"}\n`;
+  prompt += `HUBRIS "Crée un groupe Test" → {"actionType":"execute","command":"creategroup","args":{"subject":"Test"},"reasoning":"Ordre HUBRIS"}\n`;
   prompt += `\n`;
 
+  // FIX : simplifié — replyContent et args ne sont PAS obligatoires dans le JSON
   prompt += `DÉCIDE EN JSON STRICT :\n`;
-  prompt += `{"actionType":"reply|ignore|execute","replyContent":"(si reply) message","command":"(si execute)","args":{"code":"(si join)","subject":"(si creategroup)"},"mediaType":"text|voice|image|null","mediaContent":null,"reasoning":"pourquoi?"}`;
+  prompt += `{"actionType":"reply|ignore|execute","replyContent":"(si reply) ton message","command":"(si execute) commande","args":{"code":"(si join)"},"reasoning":"pourquoi?"}`;
 
   return prompt;
 }
@@ -390,7 +402,17 @@ function parseJSON(raw) {
   try {
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) throw new Error('Aucun JSON');
-    return JSON.parse(match[0]);
+    const parsed = JSON.parse(match[0]);
+    
+    // FIX : normaliser les champs manquants (le schéma est plus souple maintenant)
+    if (!parsed.replyContent) parsed.replyContent = null;
+    if (!parsed.command) parsed.command = null;
+    if (!parsed.args) parsed.args = {};
+    if (!parsed.mediaType) parsed.mediaType = null;
+    if (!parsed.mediaContent) parsed.mediaContent = null;
+    if (!parsed.reasoning) parsed.reasoning = 'non spécifié';
+    
+    return parsed;
   } catch (err) {
     return {
       actionType: 'reply',
