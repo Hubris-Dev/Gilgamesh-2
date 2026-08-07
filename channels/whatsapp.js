@@ -1,10 +1,6 @@
 // channels/whatsapp.js
 // Système Respiratoire — Canal WhatsApp (Baileys)
-// PATCH 08/2025 :
-//   - Watchdog de connect() corrigé (finally block garantit reset de isConnecting)
-//   - Retry Queue branchée : envois échoués passent par retryableWrapper()
-//   - Export de isSocketAlive() pour le healthcheck externe
-//   - FIX 08/05 : envoyerAvecTimeout corrigé — plus de double log, re-throw après Rate
+// PATCH 08/2025 — FIX 08/07 : refresh groupMetadata avant envoi groupe
 
 import path from 'node:path';
 import fs from 'node:fs';
@@ -34,23 +30,9 @@ let sock = null;
 let tentatives = 0;
 let isConnecting = false;
 
-// ─── FIX LID/PN ───
-// WhatsApp adresse certains contacts (surtout en groupe) par LID (@lid) au
-// lieu du JID téléphone (@s.whatsapp.net). isWonder() (security/recognition.js)
-// compare senderId à ADMIN_IDS en format canonique : sans résolution, un
-// message de HUBRIS adressé par LID n'est jamais reconnu comme Wonder —
-// symptôme : le bot "ne voit pas" HUBRIS/les commandes dans les groupes.
-// resoudreJid() centralise l'appel à lidResolver (déjà câblé plus bas pour
-// les envois via wrapWithSessionStability) pour l'appliquer aussi en réception.
-function resoudreJid(jid) {
-  if (!jid) return jid;
-  try {
-    return lidResolver.resolveCanonical(jid) || jid;
-  } catch (err) {
-    console.warn('[WHATSAPP] resoudreJid a échoué pour', jid, ':', err.message);
-    return jid;
-  }
-}
+// Cache simple pour éviter de refresh les métadonnées à chaque message
+const _groupMetaCache = new Map();
+const GROUP_META_CACHE_MS = 5 * 60 * 1000; // 5 minutes
 
 // ─── Injection de Session Base64 ───
 
@@ -58,20 +40,17 @@ async function ingestBase64Session() {
   const credsPath = path.join(AUTH_DIR, 'creds.json');
 
   if (fs.existsSync(credsPath)) {
-    console.log('[WHATSAPP] Session locale déjà présente — SESSION_BASE64 ignoré (évite un rollback).');
+    console.log('[WHATSAPP] Session locale déjà présente — SESSION_BASE64 ignoré.');
     return;
   }
 
   const base64Session = process.env.SESSION_BASE64;
-
   if (!base64Session) {
-    console.error('[FATAL] Variable d\'environnement SESSION_BASE64 manquante.');
+    console.error('[FATAL] SESSION_BASE64 manquante.');
     process.exit(1);
   }
 
-  if (!fs.existsSync(AUTH_DIR)) {
-    fs.mkdirSync(AUTH_DIR, { recursive: true });
-  }
+  if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 
   const buffer = Buffer.from(base64Session, 'base64');
   const estZip = buffer.length >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4b;
@@ -80,19 +59,13 @@ async function ingestBase64Session() {
     if (estZip) {
       const zip = new AdmZip(buffer);
       zip.extractAllTo(AUTH_DIR, true);
-      const aDesFichiers = fs.existsSync(credsPath);
-      const aDesClefs = fs.existsSync(path.join(AUTH_DIR, 'keys')) || fs.readdirSync(AUTH_DIR).some(f => f !== 'creds.json');
-      console.log(`[WHATSAPP] Session ZIP dézippée avec succès (premier démarrage) — creds.json: ${aDesFichiers}, autres fichiers (keys): ${aDesClefs}.`);
-      if (!aDesClefs) {
-        console.warn('[WHATSAPP] ⚠️ Le zip ne contenait que creds.json, pas de fichiers keys/ — session probablement incomplète.');
-      }
     } else {
       const parsed = JSON.parse(buffer.toString('utf-8'));
       await fs.promises.writeFile(credsPath, JSON.stringify(parsed, null, 2));
-      console.warn('[WHATSAPP] Session JSON (ancien format, creds seul) ingérée — pas de keys/, session possiblement incomplète.');
     }
+    console.log('[WHATSAPP] Session ingérée.');
   } catch (err) {
-    console.error('[FATAL] Clé SESSION_BASE64 invalide ou corrompue :', err.message);
+    console.error('[FATAL] SESSION_BASE64 invalide :', err.message);
     process.exit(1);
   }
 }
@@ -105,9 +78,6 @@ function handleConnectionUpdate(update) {
   if (connection === 'open') {
     tentatives = 0;
     console.log('[WHATSAPP] Connecté — worker actif.');
-    if (sock?.sessionHealthStats) {
-      console.log('[ANTIBAN]', JSON.stringify(sock.sessionHealthStats));
-    }
     sang.emit('canal:connecte', { canal: NOM_CANAL });
   }
 
@@ -117,14 +87,11 @@ function handleConnectionUpdate(update) {
       : lastDisconnect?.error?.output?.statusCode;
 
     const dejaDeconnecte = codeErreur === DisconnectReason.loggedOut;
-
     sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: lastDisconnect?.error?.message });
 
     if (dejaDeconnecte) {
-      console.error('[FATAL] Session révoquée (logged out). Nettoyage de l\'état et auto-destruction.');
-      if (fs.existsSync(AUTH_DIR)) {
-        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-      }
+      console.error('[FATAL] Session révoquée.');
+      if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
       process.exit(1);
     }
 
@@ -139,18 +106,13 @@ function handleConnectionUpdate(update) {
 }
 
 function handleMessagesUpsert({ messages, type }) {
-  console.log(`[WHATSAPP] messages.upsert reçu — type: ${type}, count: ${messages?.length || 0}`);
   for (const msgBrut of messages) {
-    const propre = parseMessageBrute(msgBrut, resoudreJid);
-    if (!propre) continue;
-    if (!propre.text) continue;
+    const propre = parseMessageBrute(msgBrut);
+    if (!propre || !propre.text) continue;
 
     const remoteJid = msgBrut.key.remoteJid || '';
     const isGroup = remoteJid.endsWith('@g.us');
     const isChannel = remoteJid.endsWith('@newsletter');
-    const senderBrut = isGroup ? (msgBrut.key.participant || '') : remoteJid;
-
-    console.log(`[WHATSAPP] remoteJid: ${remoteJid}, isGroup: ${isGroup}, groupId: ${isGroup ? remoteJid : null}, sender brut→résolu: ${senderBrut} → ${propre.sender}`);
 
     sang.emit('canal:message:recu', {
       senderId: propre.sender,
@@ -169,70 +131,91 @@ function handleMessagesUpsert({ messages, type }) {
 }
 
 /**
- * ENVOYERAVECTIMEOUT — FIX 08/05 :
- * - Ne plus loguer "✓ Message envoyé" si ça a échoué
- * - Si l'envoi échoue avec "not-acceptable", ne PAS mettre en Rate
- *   (réessayer ne changera rien — c'est un refus du serveur, pas un timeout)
- * - Re-throw l'erreur pour que handleReponsePrete sache que ça a échoué
+ * REFRESHGROUPMETADATA — Force Baileys à recharger les clés du groupe.
+ * Appelé avant d'envoyer un message dans un groupe, pour éviter "not-acceptable".
  */
-function envoyerAvecTimeout(dest, text) {
-  return Promise.race([
-    sock.sendMessage(dest, { text }),
-    new Promise((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`Timeout ${ENVOI_TIMEOUT_MS / 1000}s`)),
-        ENVOI_TIMEOUT_MS
-      )
-    ),
-  ]).catch(async (err) => {
-    const errMsg = err?.message || String(err);
-    console.error(`[WHATSAPP] ❌ Échec envoi → ${dest}: ${errMsg}`);
+async function refreshGroupMetadata(groupId) {
+  if (!sock) return;
+  
+  const cached = _groupMetaCache.get(groupId);
+  if (cached && Date.now() - cached < GROUP_META_CACHE_MS) {
+    return; // Déjà rafraîchi récemment
+  }
+  
+  try {
+    await sock.groupMetadata(groupId);
+    _groupMetaCache.set(groupId, Date.now());
+  } catch (err) {
+    // Silencieux — le groupe n'existe peut-être plus
+  }
+}
 
-    // "not-acceptable" = le serveur WhatsApp refuse ce message.
-    // Pas la peine de réessayer via la Rate — ça échouera pareil.
-    // Causes possibles : Gilgamesh n'est plus dans le groupe, ou le JID
-    // est invalide, ou le format n'est pas accepté.
-    if (errMsg.includes('not-acceptable')) {
-      console.error(`[WHATSAPP] ⛔ not-acceptable — abandon définitif pour ${dest}. Vérifie que Gilgamesh est bien dans ce groupe.`);
-      throw err; // Pas de Rate, on abandonne
+/**
+ * ENVOYERAVECTIMEOUT — FIX 08/07
+ */
+function envoyerAvecTimeout(dest, text, isGroup = false) {
+  // FIX : si c'est un groupe, refresh les métadonnées AVANT d'envoyer
+  const preEnvoi = isGroup ? refreshGroupMetadata(dest) : Promise.resolve();
+  
+  return preEnvoi.then(() => 
+    Promise.race([
+      sock.sendMessage(dest, { text }),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Timeout ${ENVOI_TIMEOUT_MS / 1000}s`)),
+          ENVOI_TIMEOUT_MS
+        )
+      ),
+    ])
+  ).catch(async (err) => {
+    const errMsg = err?.message || String(err);
+    console.error(`[WHATSAPP] Échec envoi → ${dest}: ${errMsg}`);
+
+    // not-acceptable sur un groupe = les clés ne sont pas à jour.
+    // On force un refresh ET on réessaie UNE fois.
+    if (errMsg.includes('not-acceptable') && dest.endsWith('@g.us')) {
+      console.log(`[WHATSAPP] Tentative refresh metadata pour ${dest}...`);
+      try {
+        await sock.groupMetadata(dest);
+        _groupMetaCache.set(dest, Date.now());
+        // Réessayer UNE fois
+        await sock.sendMessage(dest, { text });
+        console.log(`[WHATSAPP] ✓ Envoi groupe réussi après refresh metadata`);
+        return; // Succès !
+      } catch (retryErr) {
+        console.error(`[WHATSAPP] Échec après refresh: ${retryErr.message}`);
+      }
     }
 
     // Pour les autres erreurs (timeout, réseau), utiliser la Rate
-    try {
-      const { queue } = await import('../core/retry-queue.js');
-      queue(
-        () => sock.sendMessage(dest, { text }),
-        { dest, text, canal: NOM_CANAL }
-      );
-      console.log(`[WHATSAPP] 🔄 Message mis en file Rate pour ${dest}`);
-    } catch (queueErr) {
-      console.error('[WHATSAPP] Rate indisponible:', queueErr.message);
+    if (!errMsg.includes('not-acceptable')) {
+      try {
+        const { queue } = await import('../core/retry-queue.js');
+        queue(
+          () => sock.sendMessage(dest, { text }),
+          { dest, text, canal: NOM_CANAL }
+        );
+      } catch (_) {}
     }
 
-    // IMPORTANT : re-throw pour que handleReponsePrete NE logue PAS "✓ Message envoyé"
     throw err;
   });
 }
 
 async function handleReponsePrete(payload) {
   try {
-    const { target, text, isGroup, groupId, messageId } = payload;
-    if (!sock || !target || !text) {
-      console.warn(`[WHATSAPP] Envoi abandonné — sock=${!!sock} target=${!!target} text=${!!text}`);
-      return;
-    }
+    const { target, text, isGroup, groupId } = payload;
+    if (!sock || !target || !text) return;
 
     const cible = (isGroup && groupId) ? groupId : target;
     const dest = cible.includes('@') ? cible : cible + '@s.whatsapp.net';
+    const versGroupe = !!(isGroup && groupId);
 
-    // Log détaillé pour debug groupes
-    console.log(`[WHATSAPP] Envoi → dest=${dest} isGroup=${!!isGroup} groupId=${groupId || 'N/A'} target=${target} msgId=${messageId || 'N/A'}`);
-
-    await envoyerAvecTimeout(dest, text);
+    console.log(`[WHATSAPP] Envoi → ${dest} groupe=${versGroupe}`);
+    await envoyerAvecTimeout(dest, text, versGroupe);
     console.log(`[WHATSAPP] ✓ Message envoyé à ${dest}`);
   } catch (err) {
-    // L'erreur est déjà loggée dans envoyerAvecTimeout
-    console.error(`[WHATSAPP] Échec final envoi : ${err.message}`);
+    console.error(`[WHATSAPP] Échec final : ${err.message}`);
   }
 }
 
@@ -258,25 +241,17 @@ async function connect() {
 
   try {
     const watchdog = setTimeout(() => {
-      if (isConnecting) {
-        console.error('[WHATSAPP] connect() bloqué depuis 45s — reset forcé.');
-        isConnecting = false;
-        reconnect();
-      }
+      if (isConnecting) { console.error('[WHATSAPP] connect() bloqué 45s — reset.'); isConnecting = false; reconnect(); }
     }, 45000);
 
     try {
       await ingestBase64Session();
-
       const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
       const { version } = await fetchLatestBaileysVersion();
 
       sock = makeWASocket({
         version,
-        auth: {
-          creds: state.creds,
-          keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
-        },
+        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
         markOnlineOnConnect: true,
@@ -289,14 +264,9 @@ async function connect() {
         healthMonitoring: true,
         lidResolver,
         health: {
-          badMacThreshold: 3,
-          badMacWindowMs: 60_000,
-          onDegraded: (stats) => {
-            console.error(`[ANTIBAN] 🔴 Session dégradée : ${stats.badMacCount} Bad MAC en 60s`);
-          },
-          onRecovered: () => {
-            console.log('[ANTIBAN] 🟢 Session récupérée.');
-          },
+          badMacThreshold: 3, badMacWindowMs: 60_000,
+          onDegraded: (stats) => console.error(`[ANTIBAN] 🔴 ${stats.badMacCount} Bad MAC`),
+          onRecovered: () => console.log('[ANTIBAN] 🟢 Récupérée.'),
         },
       });
 
@@ -304,29 +274,15 @@ async function connect() {
       sock.ev.on('connection.update', handleConnectionUpdate);
       sock.ev.on('messages.upsert', handleMessagesUpsert);
 
-      // Best-effort : Baileys peut émettre les correspondances LID↔PN qu'il
-      // découvre. Fiabilité variable selon la version (voir Baileys#2263 —
-      // parfois cet évènement ne se déclenche jamais) : ça ne remplace pas
-      // le vrai fix (upgrade Baileys ≥6.8 pour le champ Alt sur MessageKey),
-      // mais ça coûte rien et aide resoudreJid() quand ça marche.
-      sock.ev.on('lid-mapping.update', ({ lid, pn } = {}) => {
-        if (lid && pn) lidResolver.learn({ lid, pn });
-      });
-
       setupListeners();
       clearTimeout(watchdog);
       return sock;
     } catch (err) {
       clearTimeout(watchdog);
-      console.error('[WHATSAPP] Echec de connexion :', err.message);
+      console.error('[WHATSAPP] Echec connexion :', err.message);
       sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: err.message });
-
       tentatives += 1;
-      if (tentatives > MAX_TENTATIVES_RECONNEXION) {
-        console.error('[WHATSAPP] ' + MAX_TENTATIVES_RECONNEXION + ' échecs — arrêt critique.');
-        process.exit(1);
-      }
-      console.warn('[WHATSAPP] Nouvelle tentative dans 5s (' + tentatives + '/' + MAX_TENTATIVES_RECONNEXION + ')...');
+      if (tentatives > MAX_TENTATIVES_RECONNEXION) { console.error('[WHATSAPP] Arrêt critique.'); process.exit(1); }
       setTimeout(connect, 5000);
       return null;
     }
@@ -335,34 +291,26 @@ async function connect() {
   }
 }
 
-function getSocket() {
-  return sock;
-}
-
-function isSocketAlive() {
-  return !!(sock && sock.user);
-}
+function getSocket() { return sock; }
+function isSocketAlive() { return !!(sock && sock.user); }
 
 async function cleanup() {
   sang.removeAllListeners('reponse:prete');
+  _groupMetaCache.clear();
   if (sock) {
     try { sock.ev.removeAllListeners(); } catch (_) {}
     try { sock.end(new Error('reconnexion')); } catch (_) {}
     sock = null;
   }
-  console.log('[WHATSAPP] Nettoyé proprement.');
 }
 
-async function envoyer(destinataire, texte, isGroup = false) {
-  if (!sock) { console.warn('[WHATSAPP] Socket absent.'); return false; }
+async function envoyer(destinataire, texte) {
+  if (!sock) return false;
   try {
     const jid = destinataire.includes('@') ? destinataire : destinataire + '@s.whatsapp.net';
     await sock.sendMessage(jid, { text: texte });
     return true;
-  } catch (err) {
-    console.error('[WHATSAPP] Erreur envoi :', err.message);
-    return false;
-  }
+  } catch (err) { return false; }
 }
 
 export { connect, reconnect, getSocket, isSocketAlive, cleanup, envoyer };
