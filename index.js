@@ -59,6 +59,7 @@ app.listen(port, () => {
 
 if (!geneseed.verify()) {
   console.error('[SQUELETTE] Gène-seed invalide. Arrêt.');
+  heartbeatModule.sang.emit('squelette:exit-imminent', { organe: 'squelette', raison: 'geneseed_invalide' });
   process.exit(1);
 }
 
@@ -140,6 +141,7 @@ async function boot() {
       } else if (!_whatsappDejaTenteRedemarrage) {
         console.error(`[HEALTHCHECK] WhatsApp zombie — ${Math.floor(inactivite/60000)}min. Redémarrage...`);
         _whatsappDejaTenteRedemarrage = true;
+        sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'zombie_healthcheck', inactiviteMin: Math.floor(inactivite / 60000) });
         setTimeout(() => { console.error('[HEALTHCHECK] Exit forcé.'); process.exit(1); }, 5000);
       }
     }
@@ -154,6 +156,7 @@ async function boot() {
 
 boot().catch((e) => {
   console.error('[SQUELETTE] Échec critique :', e.message);
+  heartbeatModule.sang.emit('squelette:exit-imminent', { organe: 'squelette', raison: 'boot_echoue', detail: e.message });
   process.exit(1);
 });
 
@@ -167,7 +170,11 @@ function shutdown(signal) {
     .then(() => { console.log('[SQUELETTE] Arrêt terminé.'); process.exit(0); })
     .catch(() => { console.log('[SQUELETTE] Arrêt forcé.'); process.exit(0); });
 
-  setTimeout(() => { console.error('[SQUELETTE] Timeout.'); process.exit(1); }, 10000);
+  setTimeout(() => {
+    console.error('[SQUELETTE] Timeout.');
+    heartbeatModule.sang.emit('squelette:exit-imminent', { organe: 'squelette', raison: 'shutdown_timeout' });
+    process.exit(1);
+  }, 10000);
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
