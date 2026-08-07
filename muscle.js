@@ -3,6 +3,8 @@
 // Exécution des intentions du Nerf
 // Loi 1 : Le Muscle reçoit des intentions via le Sang, jamais appels directs
 // Loi 2 : Séparation stricte : Nerf décide QUOI, Muscle exécute COMMENT
+//
+// FIX 08/07 : joinGroup force une synchro metadata après avoir rejoint
 
 import { sang } from './core/heartbeat.js';
 import { getSocket } from './channels/whatsapp.js';
@@ -13,10 +15,7 @@ export function activateMuscle() {
     sang.on('intention:muscle', async (payload) => {
         const { target, command, args = {}, canal, isGroup, groupId, demandedBy } = payload;
         console.log(`[MUSCLE] Intention reçue: ${command} → ${target}`);
-        // "creategroup" ajouté : réservée à HUBRIS, comme les autres actions
-        // qui modifient la messagerie elle-même plutôt que juste répondre.
-        // Chaînes ajoutées : rejoindre/quitter sont sensibles (changent ce à quoi
-        // le compte est abonné), voir/parler ne le sont pas.
+        
         const commandesSensibles = ['block', 'unblock', 'kick', 'promote', 'demote', 'leave', 'creategroup', 'joinchannel', 'leavechannel'];
         if (commandesSensibles.includes(command.toLowerCase()) && !isWonder(demandedBy)) {
             console.warn(`[MUSCLE] Commande "${command}" refusée — ${target} n'est pas HUBRIS.`);
@@ -38,12 +37,8 @@ export async function executeCommand(command, target, args, canal, isGroup, grou
     const sock = getSocket();
     if (!sock) throw new Error('Client WhatsApp non disponible (canal non initialisé).');
     switch (command.toLowerCase()) {
-        // block/unblock ciblent toujours LA PERSONNE, jamais le groupe.
         case 'block': return await blockUser(sock, target);
         case 'unblock': return await unblockUser(sock, target);
-        // CORRIGÉ : mute/unmute/leave sont des actions de GROUPE — avant,
-        // elles utilisaient `target` (l'expéditeur individuel), ce qui n'a
-        // pas de sens ("quitter" une personne ?). Il faut viser le groupe.
         case 'mute':
             if (!isGroup || !groupId) throw new Error('mute nécessite un contexte de groupe.');
             return await muteGroup(sock, groupId, args.duration || 86400000);
@@ -53,7 +48,7 @@ export async function executeCommand(command, target, args, canal, isGroup, grou
         case 'leave':
             if (!isGroup || !groupId) throw new Error('leave nécessite un contexte de groupe.');
             return await leaveGroup(sock, groupId);
-        case 'join': return await joinGroup(sock, args.code);
+        case 'join': return await joinGroup(sock, args.code || args.inviteCode);
         case 'promote': return await promoteUser(sock, args.userId || target, args.groupId || groupId);
         case 'demote': return await demoteUser(sock, args.userId || target, args.groupId || groupId);
         case 'kick': return await kickUser(sock, args.userId || target, args.groupId || groupId);
@@ -62,9 +57,6 @@ export async function executeCommand(command, target, args, canal, isGroup, grou
         case 'joinchannel': return await joinChannel(sock, args.inviteCode, args.channelJid);
         case 'leavechannel': return await leaveChannel(sock, args.channelJid);
         case 'viewchannel': return await viewChannel(sock, args.inviteCode, args.channelJid);
-        // speakchannel reste dédié aux vraies chaînes (@newsletter) — les
-        // groupes passent maintenant par une "reply" normale (voir brain.js,
-        // routée vers le groupe depuis le fix whatsapp.js du 04/08).
         case 'speakchannel': return await speakChannel(sock, args.channelJid, args.text);
         default: throw new Error(`Commande inconnue: ${command}`);
     }
@@ -75,20 +67,39 @@ async function unblockUser(sock, userId) { await sock.updateBlockStatus(userId, 
 async function muteGroup(sock, groupId, duration = 86400000) { sang.emit('groupe:mute', { groupId, duration, until: Date.now() + duration }); return { action: 'mute', groupId, duration, status: 'muted' }; }
 async function unmuteGroup(sock, groupId) { sang.emit('groupe:unmute', { groupId }); return { action: 'unmute', groupId, status: 'unmuted' }; }
 async function leaveGroup(sock, groupId) { await sock.groupLeave(groupId); return { action: 'leave', groupId, status: 'left' }; }
-async function joinGroup(sock, inviteCode) { const result = await sock.groupAcceptInvite(inviteCode); return { action: 'join', inviteCode, groupId: result, status: 'joined' }; }
+
+/**
+ * JOINGROUP — FIX 08/07 : force une synchro des métadonnées après avoir rejoint.
+ * Résout le "not-acceptable" qui peut survenir quand les clés de chiffrement
+ * du groupe ne sont pas encore chargées côté client.
+ */
+async function joinGroup(sock, inviteCode) {
+    if (!inviteCode) throw new Error('Code d\'invitation manquant (args.code ou args.inviteCode).');
+    console.log(`[MUSCLE] Rejoindre le groupe avec le code: ${inviteCode}`);
+    
+    const result = await sock.groupAcceptInvite(inviteCode);
+    const groupId = typeof result === 'string' ? result : result?.id || result?.gid;
+    console.log(`[MUSCLE] Groupe rejoint: ${groupId}`);
+    
+    // FIX : forcer une synchro des métadonnées du groupe
+    // pour que les clés de chiffrement soient chargées
+    if (groupId) {
+        try {
+            await sock.groupMetadata(groupId);
+            console.log(`[MUSCLE] Métadonnées du groupe ${groupId} synchronisées.`);
+        } catch (metaErr) {
+            console.warn(`[MUSCLE] Synchro metadata échouée pour ${groupId}: ${metaErr.message} — l'envoi pourrait échouer.`);
+        }
+    }
+    
+    return { action: 'join', inviteCode, groupId, status: 'joined' };
+}
+
 async function promoteUser(sock, userId, groupId) { await sock.groupParticipantsUpdate(groupId, [userId], 'promote'); return { action: 'promote', userId, groupId, status: 'promoted' }; }
 async function demoteUser(sock, userId, groupId) { await sock.groupParticipantsUpdate(groupId, [userId], 'demote'); return { action: 'demote', userId, groupId, status: 'demoted' }; }
 async function kickUser(sock, userId, groupId) { await sock.groupParticipantsUpdate(groupId, [userId], 'remove'); return { action: 'kick', userId, groupId, status: 'kicked' }; }
 async function setStatus(sock, statusText) { await sock.updateProfileStatus(statusText); return { action: 'status', text: statusText, status: 'updated' }; }
 
-/**
- * CREATEGROUP — Crée un groupe WhatsApp et y ajoute des participants.
- * Si args.participants est vide/absent, ajoute automatiquement le demandeur
- * (le "target" de l'intention) — matche "crée un groupe et mets moi dedans".
- * NOTE : Baileys attend des JID au format @s.whatsapp.net pour groupCreate ;
- * si le demandeur arrive en format @lid, il faudra peut-être le convertir —
- * à vérifier au premier test réel.
- */
 async function createGroup(sock, subject, participants, requester) {
     if (!subject || !subject.trim()) throw new Error('Nom de groupe manquant (args.subject).');
     const membres = (participants && participants.length) ? participants : [requester];
@@ -96,12 +107,6 @@ async function createGroup(sock, subject, participants, requester) {
     return { action: 'creategroup', subject, participants: membres, groupId: result.id, status: 'created' };
 }
 
-/**
- * Chaînes WhatsApp — API "newsletter" de Baileys.
- * NOTE : pas de méthode fiable pour promouvoir Gilgamesh admin d'une chaîne
- * par code — ce rôle se donne manuellement depuis l'app WhatsApp par HUBRIS.
- * Une fois admin, speakchannel fonctionne normalement.
- */
 async function resolveChannelJid(sock, inviteCode, channelJid) {
     if (channelJid) return channelJid;
     if (!inviteCode) throw new Error('Il faut soit channelJid, soit inviteCode.');
