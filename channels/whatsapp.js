@@ -111,7 +111,8 @@ function handleConnectionUpdate(update) {
       console.error('[FATAL] Session révoquée.');
       sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'session_revoquee' });
       if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-      process.exit(1);
+      arrete = true;
+      returne null;
     }
 
     tentatives += 1;
