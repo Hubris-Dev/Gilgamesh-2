@@ -35,11 +35,11 @@ export async function execute() {
     }
 
     if (decision.actionType === 'reply' && decision.target && decision.replyContent) {
-      console.log(`[VOLONTÉ] → ${decision.target}: "${decision.replyContent.substring(0, 50)}"`);
+      console.log(`[VOLONTÉ] → ${decision.target} (${decision.canal || 'whatsapp'}): "${decision.replyContent.substring(0, 50)}"`);
       sang.emit('reponse:prete', {
         target: decision.target,
         text: decision.replyContent,
-        canal: 'whatsapp',
+        canal: decision.canal || 'whatsapp', // FIX 08/08 : était hardcodé 'whatsapp' — ignorait silencieusement les contacts Telegram
         isGroup: !!decision.isGroup,
         groupId: decision.groupId || null,
       });
@@ -63,11 +63,12 @@ async function decideProactiveAction() {
         actionType: { type: 'string', enum: ['reply', 'ignore'] },
         replyContent: { type: ['string', 'null'] },
         target: { type: ['string', 'null'] },
+        canal: { type: ['string', 'null'], enum: ['whatsapp', 'telegram', null] },
         isGroup: { type: 'boolean' },
         groupId: { type: ['string', 'null'] },
         reasoning: { type: 'string' },
       },
-      required: ['actionType', 'replyContent', 'target', 'isGroup', 'groupId', 'reasoning'],
+      required: ['actionType', 'replyContent', 'target', 'canal', 'isGroup', 'groupId', 'reasoning'],
       additionalProperties: false,
     },
   };
@@ -100,6 +101,7 @@ async function getRecentContacts() {
           lastTimestamp: { $first: '$timestamp' },
           messageCount: { $sum: 1 },
           groupId: { $first: '$groupId' },
+          canal: { $first: '$canal' },
         },
       },
       { $limit: MAX_CONTACTS_TO_CHECK },
@@ -112,6 +114,7 @@ async function getRecentContacts() {
       messageCount: r.messageCount,
       isGroup: !!r.groupId,
       groupId: r.groupId,
+      canal: r.canal || 'whatsapp', // FIX 08/08 : anciens messages sans canal enregistré → défaut WhatsApp
     }));
   } catch (err) {
     console.warn('[VOLONTÉ] getRecentContacts échouée :', err.message);
@@ -145,11 +148,12 @@ Heure : ${timeStr} (${hour}h). Tu viens de te réveiller d'une pause.
     for (const c of contacts) {
       const mins = Math.floor((Date.now() - new Date(c.lastTimestamp).getTime()) / 60000);
       const ago = mins < 1 ? 'maintenant' : mins < 60 ? `${mins}min` : `${Math.floor(mins/60)}h`;
-      prompt += `- ${c.senderId} | "${c.lastMessage?.substring(0, 30)}" | ${ago}\n`;
+      prompt += `- [${c.canal}] ${c.senderId} | "${c.lastMessage?.substring(0, 30)}" | ${ago}\n`;
     }
   }
 
-  prompt += `\nDÉCIDE JSON: {"actionType":"ignore|reply","replyContent":"...","target":"...","isGroup":false,"groupId":null,"reasoning":"..."}`;
+  prompt += `\n⚠️ Telegram : si le contact ne t'a jamais écrit récemment, tu ne peux pas lui écrire en premier (contrainte API) — préfère un contact qui t'a déjà parlé.\n`;
+  prompt += `\nDÉCIDE JSON: {"actionType":"ignore|reply","replyContent":"...","target":"...","canal":"whatsapp|telegram","isGroup":false,"groupId":null,"reasoning":"..."}`;
   return prompt;
 }
 
