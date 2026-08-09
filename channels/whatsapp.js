@@ -223,6 +223,7 @@ function envoyerAvecTimeout(dest, text, isGroup = false) {
 }
 
 async function handleReponsePrete(payload) {
+  if (payload.canal && payload.canal !== NOM_CANAL) return; // Pas pour nous — un autre canal gère.
   try {
     const { target, text, isGroup, groupId } = payload;
     if (!sock || !target || !text) return;
@@ -242,7 +243,7 @@ async function handleReponsePrete(payload) {
 // ─── Connexion / Reconnexion ───
 
 function setupListeners() {
-  sang.removeAllListeners('reponse:prete');
+  sang.off('reponse:prete', handleReponsePrete);
   sang.on('reponse:prete', handleReponsePrete);
 }
 
@@ -325,7 +326,7 @@ function getSocket() { return sock; }
 function isSocketAlive() { return !!(sock && sock.user); }
 
 async function cleanup() {
-  sang.removeAllListeners('reponse:prete');
+  sang.off('reponse:prete', handleReponsePrete);
   _groupMetaCache.clear();
   if (sock) {
     try { sock.ev.removeAllListeners(); } catch (_) {}
