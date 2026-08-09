@@ -91,11 +91,11 @@ export async function getMemory(senderId, groupId = null, limit = 20) {
     }
 }
 
-export async function appendMemory(senderId, groupId = null, role, content) {
+export async function appendMemory(senderId, groupId = null, role, content, canal = null) {
     if (!db) { return false; }
     try {
         const collection = db.collection('conversations');
-        await collection.insertOne({ senderId, groupId: groupId || null, role, content, timestamp: new Date() });
+        await collection.insertOne({ senderId, groupId: groupId || null, role, content, canal, timestamp: new Date() });
         return true;
     } catch (err) {
         console.error('[MÉMOIRE] Erreur appendMemory :', err.message);
