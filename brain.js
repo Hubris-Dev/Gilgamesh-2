@@ -67,7 +67,7 @@ const DECISION_SCHEMA = {
       command: {
         type: ['string', 'null'],
         enum: ['block', 'unblock', 'mute', 'unmute', 'promote', 'demote', 'kick', 'leave', 'join', 'status',
-               'creategroup', 'joinchannel', 'leavechannel', 'viewchannel', 'speakchannel', null],
+               'creategroup', 'joinchannel', 'leavechannel', 'viewchannel', 'speakchannel', 'websearch', null],
       },
       args: {
         type: 'object',
@@ -80,6 +80,8 @@ const DECISION_SCHEMA = {
           groupId: { type: ['string', 'null'] },
           duration: { type: ['number', 'null'] },
           code: { type: ['string', 'null'] },
+          userId: { type: ['string', 'null'] },
+          query: { type: ['string', 'null'] },
         },
         // FIX : plus de required sur les sous-champs — le LLM met ce dont il a besoin
         additionalProperties: false,
@@ -121,7 +123,7 @@ export function activateBrain() {
     const startTime = Date.now();
     const {
       senderId, text, canal, isWonder, messageId,
-      isGroup, groupId, isChannel, channelId,
+      isGroup, groupId, isChannel, channelId, replyToUserId,
       mediaType, mediaPath,
     } = payload;
 
@@ -157,6 +159,7 @@ export function activateBrain() {
         groupId,
         isChannel,
         channelId,
+        replyToUserId,
         timestamp: new Date().toISOString(),
       };
 
@@ -173,14 +176,14 @@ export function activateBrain() {
       const decision = thinking.decision;
 
       try {
-        await appendMemory(senderId, isGroup ? groupId : null, 'user', sanitized.nettoye);
+        await appendMemory(senderId, isGroup ? groupId : null, 'user', sanitized.nettoye, canal);
       } catch (err) {
         console.warn("[NERF] Mémoire user échouée.", err.message);
       }
 
       if (decision.actionType === 'reply' && isChannel) {
         console.log(`[NERF] "reply" pour chaîne ${channelId} — archivé seulement.`);
-        try { await appendMemory(senderId, null, 'user', sanitized.nettoye); } catch (_) {}
+        try { await appendMemory(senderId, null, 'user', sanitized.nettoye, canal); } catch (_) {}
 
       } else if (decision.actionType === 'reply') {
         let replyText = decision.replyContent;
@@ -190,7 +193,7 @@ export function activateBrain() {
         }
 
         try {
-          await appendMemory(senderId, isGroup ? groupId : null, 'assistant', replyText);
+          await appendMemory(senderId, isGroup ? groupId : null, 'assistant', replyText, canal);
         } catch (err) {
           console.warn("[NERF] Mémoire assistant échouée.", err.message);
         }
@@ -210,10 +213,14 @@ export function activateBrain() {
         // groupId juste en dessous) — speakchannel échouait silencieusement
         // dès que le LLM ne recopiait pas l'ID exact de la chaîne, ce qui
         // ressemblait à "Gilgamesh confond group et channel".
+        // FIX 08/08 : idem pour userId — sur Telegram, kick/promote/demote
+        // ciblent la personne à qui HUBRIS a répondu (reply_to_message),
+        // pas un ID que le LLM devrait deviner ou inventer.
         const enrichedArgs = {
           ...(decision.args || {}),
           groupId: decision.args?.groupId || groupId,
           channelJid: decision.args?.channelJid || channelId,
+          userId: decision.args?.userId || replyToUserId || undefined,
         };
         sang.emit('intention:muscle', {
           target: senderId, command: decision.command, args: enrichedArgs,
@@ -251,6 +258,9 @@ function buildMuscleConfirmation(command, success, result, error) {
     if (error && error.includes('Autorisation refusée')) {
       return "Tu n'as pas l'autorité pour m'ordonner cela.";
     }
+    if (error && error.includes('pas possible sur Telegram')) {
+      return error; // Message déjà clair et honnête — pas besoin de le reformuler.
+    }
     if (error && error.includes('code')) {
       return "J'ai besoin d'un code d'invitation valide. Donne-moi le lien du groupe.";
     }
@@ -258,6 +268,14 @@ function buildMuscleConfirmation(command, success, result, error) {
       return "Problème avec ce groupe — vérifie qu'il existe encore.";
     }
     return `L'entreprise a échoué. ${error || 'Raison inconnue.'}`;
+  }
+
+  if (command === 'websearch' && result?.resultats) {
+    if (!result.resultats.length) return "J'ai cherché, rien trouvé d'utile.";
+    return result.resultats
+      .slice(0, 3)
+      .map((r, i) => `${i + 1}. ${r.titre} — ${r.extrait}`)
+      .join('\n');
   }
 
   const messages = {
@@ -332,14 +350,23 @@ function buildContextualPrompt(systemPrompt, history, userMessage, metadata, med
   prompt += `=== CONTEXTE CANAL ===\n`;
   prompt += `Canal: ${metadata.canal}\n`;
   if (metadata.isChannel) {
-    prompt += `📡 CHAÎNE WhatsApp (${metadata.channelId}) — PAS un groupe.\n`;
+    prompt += `📡 CHAÎNE (${metadata.channelId}) — PAS un groupe.\n`;
     prompt += `⚠️ RÈGLE CRITIQUE : Ici, jamais de "reply" direct. Pour parler, actionType "execute" + commande "speakchannel" + args.text. Tu n'as PAS besoin de fournir args.channelJid — le système l'ajoute automatiquement pour CETTE chaîne. Sinon, ignore.\n`;
   } else if (metadata.isGroup && metadata.groupId) {
-    prompt += `🔵 GROUPE WHATSAPP : ${metadata.groupName || 'Inconnu'} (${metadata.groupId})\n`;
-    prompt += `⚠️ RÈGLE CRITIQUE : Tu es dans un GROUPE, pas une chaîne. Tes réponses vont DANS le groupe via un "reply" normal (routage automatique) — JAMAIS via speakchannel, réservé aux chaînes (@newsletter).\n`;
-    prompt += `⚠️ RÈGLE CRITIQUE : Si on t'envoie un lien de GROUPE (https://chat.whatsapp.com/CODE), utilise actionType "execute" avec commande "join" et args.code.\n`;
+    prompt += `🔵 GROUPE : ${metadata.groupName || 'Inconnu'} (${metadata.groupId})\n`;
+    prompt += `⚠️ RÈGLE CRITIQUE : Tu es dans un GROUPE, pas une chaîne. Tes réponses vont DANS le groupe via un "reply" normal (routage automatique) — JAMAIS via speakchannel, réservé aux chaînes.\n`;
+    if (metadata.canal === 'whatsapp') {
+      prompt += `⚠️ RÈGLE CRITIQUE : Si on t'envoie un lien de GROUPE WhatsApp (https://chat.whatsapp.com/CODE), utilise actionType "execute" avec commande "join" et args.code.\n`;
+    }
+    if (metadata.canal === 'telegram') {
+      prompt += `⚠️ Pour kick/promote/demote sur Telegram, la cible doit avoir répondu ou avoir été répondue (reply) — le système remplit args.userId automatiquement depuis le message auquel on répond. Tu n'as pas besoin de connaître l'ID numérique toi-même.\n`;
+      prompt += `⚠️ INTERDIT sur Telegram (limite de l'API Bot, pas une option) : "join", "creategroup", "joinchannel" — un bot ne peut ni créer, ni rejoindre un groupe/chaîne de lui-même. Si HUBRIS le demande sur Telegram, explique-le-lui en reply au lieu d'exécuter.\n`;
+    }
   } else {
     prompt += `Conversation privée avec ${metadata.senderName}\n`;
+    if (metadata.canal === 'telegram') {
+      prompt += `⚠️ Telegram : si cette personne ne t'a jamais écrit avant, tu ne peux pas lui écrire en premier (contrainte API) — seulement répondre ici.\n`;
+    }
   }
   prompt += `\n`;
 
@@ -374,11 +401,12 @@ function buildDecisionPrompt(contextualPrompt, analysis, metadata, originalText)
   }
 
   prompt += `=== GUIDE DES COMMANDES ===\n`;
-  prompt += `- "join" : args.code — lien de GROUPE, format https://chat.whatsapp.com/CODE\n`;
-  prompt += `- "creategroup" : args.subject\n`;
-  prompt += `- "joinchannel" : args.inviteCode — lien de CHAÎNE, format https://whatsapp.com/channel/CODE (PAS chat.whatsapp.com)\n`;
+  prompt += `- "join" : args.code — lien de GROUPE WhatsApp, format https://chat.whatsapp.com/CODE (WhatsApp seulement, impossible sur Telegram)\n`;
+  prompt += `- "creategroup" : args.subject (WhatsApp seulement, impossible sur Telegram)\n`;
+  prompt += `- "joinchannel" : args.inviteCode — lien de CHAÎNE, format https://whatsapp.com/channel/CODE (WhatsApp seulement, impossible sur Telegram)\n`;
   prompt += `- "speakchannel" : args.text seulement — PAS besoin d'args.channelJid, auto-rempli par le système\n`;
   prompt += `- "leave" : quitter le groupe actuel\n`;
+  prompt += `- "websearch" : args.query — cherche sur le web quand tu as besoin d'une info que tu ne connais pas ou qui a pu changer (actualité, fait récent, prix, etc.)\n`;
   prompt += `- NE JAMAIS confondre : chat.whatsapp.com/* = GROUPE (join) · whatsapp.com/channel/* = CHAÎNE (joinchannel) · speakchannel = parler dans une chaîne, jamais dans un groupe\n`;
   prompt += `\n`;
 
@@ -388,6 +416,7 @@ function buildDecisionPrompt(contextualPrompt, analysis, metadata, originalText)
   prompt += `Groupe, "Salut" → {"actionType":"reply","replyContent":"Yo","reasoning":"Salutation"}\n`;
   prompt += `Chaîne, HUBRIS veut poster → {"actionType":"execute","command":"speakchannel","args":{"text":"le message"},"reasoning":"Poster dans la chaîne"}\n`;
   prompt += `HUBRIS "Crée un groupe Test" → {"actionType":"execute","command":"creategroup","args":{"subject":"Test"},"reasoning":"Ordre HUBRIS"}\n`;
+  prompt += `"C'est quoi le prix du bitcoin là" → {"actionType":"execute","command":"websearch","args":{"query":"prix bitcoin aujourd'hui"},"reasoning":"Info temps réel"}\n`;
   prompt += `\n`;
 
   // FIX : simplifié — replyContent et args ne sont PAS obligatoires dans le JSON
