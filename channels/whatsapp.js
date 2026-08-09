@@ -108,11 +108,12 @@ function handleConnectionUpdate(update) {
     sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: lastDisconnect?.error?.message });
 
     if (dejaDeconnecte) {
-      console.error('[FATAL] Session révoquée.');
-      sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'session_revoquee' });
-      if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-      arrete = true;
-      returne null;
+    if (dejaDeconnecte) {
+  console.error('[FATAL] Session révoquée.');
+  sang.emit('canal:indisponible', { canal: 'whatsapp', raison: 'session_revoquee' });
+  if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+  arrete = true;
+  return null;  
     }
 
     tentatives += 1;
