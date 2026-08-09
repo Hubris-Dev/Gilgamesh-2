@@ -14,6 +14,7 @@ import * as scheduler from './core/scheduler.js';
 import * as memoire from './memory/mongo.js';
 import * as heartbeatModule from './core/heartbeat.js';
 import * as whatsapp from './channels/whatsapp.js';
+import * as telegram from './channels/telegram.js';
 import * as immune from './security/immune.js';
 import { activateMuscle } from './muscle.js';
 import { activateBrain } from './brain.js';
@@ -47,6 +48,7 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'ok',
     whatsapp: alive ? 'connecté' : 'déconnecté',
+    telegram: telegram.isAlive() ? 'connecté' : (process.env.TELEGRAM_BOT_TOKEN ? 'déconnecté' : 'non configuré'),
     volonte: volonteStatus,
     uptime: process.uptime(),
   });
@@ -90,6 +92,11 @@ async function boot() {
   }
 
   whatsapp.connect();
+
+  // Optionnel : ne démarre que si TELEGRAM_BOT_TOKEN est présent.
+  // N'affecte jamais WhatsApp si absent ou si la connexion échoue (voir
+  // channels/telegram.js — jamais de process.exit côté Telegram).
+  telegram.connect();
 
   try {
     volonte = await import('./core/volonte.js');
@@ -165,6 +172,7 @@ function shutdown(signal) {
   scheduler.stop();
   heartbeatModule.stop();
   if (whatsapp.cleanup) whatsapp.cleanup();
+  if (telegram.cleanup) telegram.cleanup();
 
   memoire.disconnect()
     .then(() => { console.log('[SQUELETTE] Arrêt terminé.'); process.exit(0); })
