@@ -14,7 +14,7 @@ import * as filter from './filter.js';
 
 export function activate() {
   sang.on('canal:message:recu', (payload = {}) => {
-    const { senderId, text, canal, senderName, messageId, isGroup, groupId, isChannel, channelId, mediaType, mediaPath } = payload;
+    const { senderId, text, canal, senderName, messageId, isGroup, groupId, groupName, isChannel, channelId, replyToUserId, mediaType, mediaPath } = payload;
 
     const verdict = filter.isSafeInput(text);
     if (!verdict.safe) {
@@ -32,8 +32,10 @@ export function activate() {
       messageId,
       isGroup,
       groupId,
+      groupName,
       isChannel,
       channelId,
+      replyToUserId,
       mediaType,
       mediaPath,
     });
