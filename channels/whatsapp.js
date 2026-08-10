@@ -29,6 +29,12 @@ const lidResolver = new LidResolver({ canonical: 'pn' });
 let sock = null;
 let tentatives = 0;
 let isConnecting = false;
+// FIX 09/08 : WhatsApp ne doit JAMAIS tuer le process — Telegram (et tout
+// le reste) doivent continuer même si WhatsApp est mort. `desactive` = ce
+// canal a besoin d'une action humaine (nouvelle SESSION_BASE64 via Gate +
+// redéploiement) pour repartir ; en attendant, il s'efface silencieusement
+// au lieu de faire planter tout le corps.
+let desactive = false;
 
 // ─── FIX LID/PN (restauré 08/07 — avait disparu dans le refactor "refresh groupMetadata") ───
 // WhatsApp adresse certains contacts (surtout en groupe) par LID (@lid) au
@@ -57,14 +63,13 @@ async function ingestBase64Session() {
 
   if (fs.existsSync(credsPath)) {
     console.log('[WHATSAPP] Session locale déjà présente — SESSION_BASE64 ignoré.');
-    return;
+    return true;
   }
 
   const base64Session = process.env.SESSION_BASE64;
   if (!base64Session) {
-    console.error('[FATAL] SESSION_BASE64 manquante.');
-    sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'SESSION_BASE64_manquante' });
-    process.exit(1);
+    console.warn('[WHATSAPP] SESSION_BASE64 absente — canal désactivé (les autres canaux continuent normalement).');
+    return false;
   }
 
   if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
@@ -81,10 +86,11 @@ async function ingestBase64Session() {
       await fs.promises.writeFile(credsPath, JSON.stringify(parsed, null, 2));
     }
     console.log('[WHATSAPP] Session ingérée.');
+    return true;
   } catch (err) {
-    console.error('[FATAL] SESSION_BASE64 invalide :', err.message);
-    sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'SESSION_BASE64_invalide', detail: err.message });
-    process.exit(1);
+    console.error('[WHATSAPP] SESSION_BASE64 invalide :', err.message);
+    sang.emit('whatsapp:erreur', { niveau: 'error', raison: 'SESSION_BASE64_invalide', detail: err.message });
+    return false;
   }
 }
 
@@ -108,19 +114,20 @@ function handleConnectionUpdate(update) {
     sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: lastDisconnect?.error?.message });
 
     if (dejaDeconnecte) {
-    if (dejaDeconnecte) {
-  console.error('[FATAL] Session révoquée.');
-  sang.emit('canal:indisponible', { canal: 'whatsapp', raison: 'session_revoquee' });
-  if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-  arrete = true;
-  return null;  
+      console.error('[WHATSAPP] Session révoquée — canal désactivé. Il faut une nouvelle SESSION_BASE64 (via Gate) puis redéployer.');
+      sang.emit('whatsapp:erreur', { niveau: 'error', raison: 'session_revoquee' });
+      if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+      desactive = true;
+      return; // Ni process.exit, ni reconnect() — Telegram et le reste continuent.
     }
 
     tentatives += 1;
     if (tentatives > MAX_TENTATIVES_RECONNEXION) {
-      console.error('[WHATSAPP] ' + MAX_TENTATIVES_RECONNEXION + ' échecs — arrêt critique.');
-      sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'max_tentatives_reconnexion', tentatives });
-      process.exit(1);
+      console.warn(`[WHATSAPP] ${MAX_TENTATIVES_RECONNEXION} échecs — pause 5min avant nouvelle série de tentatives (pas d'arrêt).`);
+      sang.emit('whatsapp:erreur', { niveau: 'warn', raison: 'max_tentatives_reconnexion_pause', tentatives });
+      tentatives = 0;
+      setTimeout(reconnect, 5 * 60 * 1000);
+      return;
     }
     console.warn('[WHATSAPP] Connexion perdue — tentative ' + tentatives + '/' + MAX_TENTATIVES_RECONNEXION);
     reconnect();
@@ -250,12 +257,17 @@ function setupListeners() {
 }
 
 async function reconnect() {
+  if (desactive) return;
   await cleanup();
   await new Promise(r => setTimeout(r, 5000));
   connect();
 }
 
 async function connect() {
+  if (desactive) {
+    console.warn('[WHATSAPP] Canal désactivé (besoin d\'une nouvelle SESSION_BASE64 + redéploiement).');
+    return null;
+  }
   if (isConnecting) {
     console.warn('[WHATSAPP] Connexion déjà en cours — ignoré.');
     return null;
@@ -268,7 +280,13 @@ async function connect() {
     }, 45000);
 
     try {
-      await ingestBase64Session();
+      const configOk = await ingestBase64Session();
+      if (!configOk) {
+        desactive = true;
+        clearTimeout(watchdog);
+        return null; // Pas de process.exit — les autres canaux continuent.
+      }
+
       const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
       const { version } = await fetchLatestBaileysVersion();
 
@@ -312,9 +330,11 @@ async function connect() {
       sang.emit('canal:deconnecte', { canal: NOM_CANAL, raison: err.message });
       tentatives += 1;
       if (tentatives > MAX_TENTATIVES_RECONNEXION) {
-        console.error('[WHATSAPP] Arrêt critique.');
-        sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'echec_connexion_repete', tentatives, detail: err.message });
-        process.exit(1);
+        console.warn(`[WHATSAPP] ${MAX_TENTATIVES_RECONNEXION} échecs — pause 5min avant nouvelle série de tentatives (pas d'arrêt).`);
+        sang.emit('whatsapp:erreur', { niveau: 'warn', raison: 'max_tentatives_connexion_pause', tentatives, detail: err.message });
+        tentatives = 0;
+        setTimeout(connect, 5 * 60 * 1000);
+        return null;
       }
       setTimeout(connect, 5000);
       return null;
@@ -326,6 +346,7 @@ async function connect() {
 
 function getSocket() { return sock; }
 function isSocketAlive() { return !!(sock && sock.user); }
+function isDisabled() { return desactive; }
 
 async function cleanup() {
   sang.off('reponse:prete', handleReponsePrete);
@@ -346,4 +367,4 @@ async function envoyer(destinataire, texte) {
   } catch (err) { return false; }
 }
 
-export { connect, reconnect, getSocket, isSocketAlive, cleanup, envoyer };
+export { connect, reconnect, getSocket, isSocketAlive, isDisabled, cleanup, envoyer };
