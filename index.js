@@ -44,10 +44,11 @@ app.get('/ping', (req, res) => res.status(200).send('Gilgamesh is awake'));
 
 app.get('/health', (req, res) => {
   const alive = whatsapp.isSocketAlive ? whatsapp.isSocketAlive() : !!whatsapp.getSocket();
+  const disabled = whatsapp.isDisabled ? whatsapp.isDisabled() : false;
   const volonteStatus = volonte ? volonte.getStatus() : { status: 'non chargé' };
   res.status(200).json({
     status: 'ok',
-    whatsapp: alive ? 'connecté' : 'déconnecté',
+    whatsapp: disabled ? 'désactivé (nouvelle SESSION_BASE64 requise)' : (alive ? 'connecté' : 'déconnecté'),
     telegram: telegram.isAlive() ? 'connecté' : (process.env.TELEGRAM_BOT_TOKEN ? 'déconnecté' : 'non configuré'),
     volonte: volonteStatus,
     uptime: process.uptime(),
@@ -135,6 +136,8 @@ async function boot() {
   }, 5 * 60 * 1000);
 
   scheduler.add('healthcheck-whatsapp', async () => {
+    if (whatsapp.isDisabled && whatsapp.isDisabled()) return; // Besoin d'une nouvelle session — pas un zombie, inutile d'insister.
+
     const maintenant = Date.now();
     const inactivite = maintenant - _derniereActiviteWhatsApp;
     const INACTIVITE_MAX = 10 * 60 * 1000;
@@ -146,10 +149,14 @@ async function boot() {
         _derniereActiviteWhatsApp = maintenant;
         whatsapp.connect();
       } else if (!_whatsappDejaTenteRedemarrage) {
-        console.error(`[HEALTHCHECK] WhatsApp zombie — ${Math.floor(inactivite/60000)}min. Redémarrage...`);
+        // FIX 09/08 : un zombie WhatsApp ne doit JAMAIS tuer le process —
+        // Telegram et le reste continuent. On reconnecte SEULEMENT ce canal.
+        console.error(`[HEALTHCHECK] WhatsApp zombie — ${Math.floor(inactivite/60000)}min. Reconnexion ciblée...`);
         _whatsappDejaTenteRedemarrage = true;
-        sang.emit('squelette:exit-imminent', { organe: 'whatsapp', raison: 'zombie_healthcheck', inactiviteMin: Math.floor(inactivite / 60000) });
-        setTimeout(() => { console.error('[HEALTHCHECK] Exit forcé.'); process.exit(1); }, 5000);
+        sang.emit('whatsapp:erreur', { niveau: 'warn', raison: 'zombie_healthcheck', inactiviteMin: Math.floor(inactivite / 60000) });
+        if (whatsapp.cleanup) await whatsapp.cleanup();
+        _derniereActiviteWhatsApp = maintenant;
+        whatsapp.connect();
       }
     }
   }, 2 * 60 * 1000);
